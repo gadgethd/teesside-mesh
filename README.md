@@ -35,13 +35,25 @@ A real-time mesh network analytics platform for [MeshCore](https://meshcore.co.u
 
 ### Phase 3 — Repeater owner portal (planned)
 - Ed25519 JWT authentication for repeater owners
-- Owner-facing dashboard for their own nodes
-- Planned node placement tool: drop a marker, preview estimated coverage before deploying
+- Owner-facing dashboard: per-node packet history, advert counts, RSSI/SNR trends from observers that heard it
+- Planned node placement tool: drop a marker on the map, preview estimated RF coverage before deploying hardware
+- Repeater registration: owners can claim a node by public key, add contact details and notes
 
 ### Phase 4 — Public website (complete)
 - Separate public-facing site at a different hostname from the analytics dashboard
 - Node documentation, install guides, MQTT connection instructions
 - Network statistics page with charts
+- Packet type reference page
+
+### Phase 5 — Network intelligence (planned)
+- Network topology graph: visualise which repeaters most frequently relay for each other
+- Multi-observer correlation: show all observers that heard the same packet on the map simultaneously
+- Multi-network support: remove the hardcoded IATA filter and add a network selector, making the platform usable by other MeshCore communities out of the box
+
+### Phase 6 — Predicted vs actual coverage (planned, stretch goal)
+- Overlay viewshed coverage polygons against where packets from each repeater have actually been received
+- Highlight discrepancies between terrain model predictions and observed real-world range
+- Requires a sufficient number of nodes publishing to MQTT to build a meaningful received-signal dataset
 
 ---
 
