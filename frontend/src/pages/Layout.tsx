@@ -31,6 +31,9 @@ export const Layout: React.FC = () => {
         <NavLink to="/mqtt" onClick={() => handleNavClick('/mqtt')} className={({ isActive }) => isActive ? 'site-nav__link site-nav__link--active' : 'site-nav__link'}>
           MQTT
         </NavLink>
+        <NavLink to="/packets" onClick={() => handleNavClick('/packets')} className={({ isActive }) => isActive ? 'site-nav__link site-nav__link--active' : 'site-nav__link'}>
+          Packets
+        </NavLink>
         <NavLink to="/open-source" onClick={() => handleNavClick('/open-source')} className={({ isActive }) => isActive ? 'site-nav__link site-nav__link--active' : 'site-nav__link'}>
           Open Source
         </NavLink>

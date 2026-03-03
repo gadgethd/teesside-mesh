@@ -108,10 +108,10 @@ export const MapView: React.FC<MapViewProps> = ({
     setDeckViewState(vs as DeckViewState);
   }, []);
 
-  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
   const allNodesWithPos = useMemo(() => Array.from(nodes.values()).filter(
     (n) => n.lat && n.lon
-      && (Date.now() - new Date(n.last_seen).getTime()) < SEVEN_DAYS_MS
+      && (Date.now() - new Date(n.last_seen).getTime()) < FOURTEEN_DAYS_MS
       && !n.name?.includes('🚫')
   ), [nodes]); // eslint-disable-line react-hooks/exhaustive-deps
   const nodesWithPos   = useMemo(() => allNodesWithPos.filter((n) => n.role === undefined || n.role === 2), [allNodesWithPos]);

@@ -210,10 +210,10 @@ export function useNodes() {
   const handleNodeUpdate = useCallback((data: { nodeId: string; ts: number }) => {
     setNodes((prev) => {
       const existing = prev.get(data.nodeId);
-      if (!existing) return prev;
       const next = new Map(prev);
       next.set(data.nodeId, {
-        ...existing,
+        node_id:   data.nodeId,
+        ...(existing ?? {}),
         last_seen: new Date(data.ts).toISOString(),
         is_online: true,
       });
@@ -225,7 +225,11 @@ export function useNodes() {
     setNodes((prev) => {
       const existing = prev.get(node.node_id) ?? { node_id: node.node_id, last_seen: new Date().toISOString(), is_online: true };
       const next = new Map(prev);
-      next.set(node.node_id, { ...existing, ...node });
+      // Filter out undefined values so they don't overwrite existing lat/lon/name etc.
+      const updates = Object.fromEntries(
+        Object.entries(node).filter(([, v]) => v !== undefined)
+      ) as Partial<MeshNode> & { node_id: string };
+      next.set(node.node_id, { ...existing, ...updates });
       return next;
     });
   }, []);

@@ -46,8 +46,10 @@ router.get('/stats', async (_req, res) => {
       query("SELECT COUNT(DISTINCT packet_hash) AS count FROM packets WHERE time > NOW() - INTERVAL '24 hours'"),
       query(`SELECT COUNT(*) AS count FROM nodes
              WHERE lat IS NOT NULL AND lon IS NOT NULL
-               AND last_seen < NOW() - INTERVAL '3 days'
-               AND last_seen > NOW() - INTERVAL '7 days'`),
+               AND (role IS NULL OR role = 2)
+               AND (name IS NULL OR name NOT LIKE '%🚫%')
+               AND last_seen <= NOW() - INTERVAL '7 days'
+               AND last_seen >  NOW() - INTERVAL '14 days'`),
       query(`SELECT COUNT(*) AS count FROM nodes
              WHERE (name IS NULL OR name NOT LIKE '%🚫%')
                AND (role IS NULL OR role != 4)`),
@@ -196,8 +198,8 @@ router.get('/stats/charts', async (_req, res) => {
           (SELECT COUNT(DISTINCT packet_hash) FROM packets WHERE time > NOW() - INTERVAL '24 hours') AS total_24h,
           (SELECT COUNT(DISTINCT packet_hash) FROM packets WHERE time > NOW() - INTERVAL '7 days') AS total_7d,
           (SELECT COUNT(DISTINCT src_node_id) FROM packets WHERE time > NOW() - INTERVAL '24 hours' AND src_node_id IS NOT NULL) AS unique_radios_24h,
-          (SELECT ROUND(AVG(rssi)::numeric, 1) FROM packets WHERE time > NOW() - INTERVAL '24 hours' AND rssi IS NOT NULL) AS avg_rssi_24h,
-          (SELECT ROUND(AVG(snr)::numeric, 1) FROM packets WHERE time > NOW() - INTERVAL '24 hours' AND snr IS NOT NULL) AS avg_snr_24h
+          (SELECT COUNT(*) FROM nodes WHERE (role IS NULL OR role = 2) AND last_seen > NOW() - INTERVAL '7 days') AS active_repeaters,
+          (SELECT COUNT(*) FROM nodes WHERE (role IS NULL OR role = 2) AND last_seen <= NOW() - INTERVAL '7 days' AND last_seen > NOW() - INTERVAL '14 days') AS stale_repeaters
       `),
     ]);
 
@@ -228,8 +230,8 @@ router.get('/stats/charts', async (_req, res) => {
         totalPackets24h:  Number(sumResult.rows[0].total_24h),
         totalPackets7d:   Number(sumResult.rows[0].total_7d),
         uniqueRadios24h:  Number(sumResult.rows[0].unique_radios_24h),
-        avgRssi24h:       sumResult.rows[0].avg_rssi_24h != null ? Number(sumResult.rows[0].avg_rssi_24h) : null,
-        avgSnr24h:        sumResult.rows[0].avg_snr_24h != null ? Number(sumResult.rows[0].avg_snr_24h) : null,
+        activeRepeaters:  Number(sumResult.rows[0].active_repeaters ?? 0),
+        staleRepeaters:   Number(sumResult.rows[0].stale_repeaters ?? 0),
         peakHour:         peakRow ? fmtHour(peakRow.hour) : null,
         peakHourCount:    peakRow ? Number(peakRow.count) : 0,
       },

@@ -9,6 +9,7 @@ import { InstallPage } from './pages/InstallPage.js';
 import { OpenSourcePage } from './pages/OpenSourcePage.js';
 import { MqttPage } from './pages/MqttPage.js';
 import { StatsPage } from './pages/StatsPage.js';
+import { PacketsPage } from './pages/PacketsPage.js';
 import './styles/globals.css';
 
 const root = document.getElementById('root')!;
@@ -31,6 +32,7 @@ ReactDOM.createRoot(root).render(
             <Route path="install" element={<InstallPage />} />
             <Route path="mqtt" element={<MqttPage />} />
             <Route path="open-source" element={<OpenSourcePage />} />
+            <Route path="packets" element={<PacketsPage />} />
             <Route path="stats" element={<StatsPage />} />
           </Route>
         </Routes>

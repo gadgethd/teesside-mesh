@@ -3,7 +3,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 export type WSReadyState = 'connecting' | 'connected' | 'disconnected';
 
 export interface WSMessage {
-  type: 'packet' | 'node_update' | 'initial_state';
+  type: 'packet' | 'node_update' | 'node_upsert' | 'initial_state' | 'coverage_update';
   data: unknown;
   ts: number;
 }

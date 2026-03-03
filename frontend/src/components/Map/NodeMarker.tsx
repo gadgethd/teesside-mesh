@@ -3,7 +3,7 @@ import { Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import type { MeshNode } from '../../hooks/useNodes.js';
 
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const SEVEN_DAYS_MS  = 7  * 24 * 60 * 60 * 1000;
 
 type MarkerVariant = 'repeater' | 'companion' | 'room';
 
@@ -62,7 +62,7 @@ export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive }) => {
   if (!node.lat || !node.lon) return null;
 
   const ageMs   = Date.now() - new Date(node.last_seen).getTime();
-  const isStale = ageMs > THREE_DAYS_MS;
+  const isStale = ageMs > SEVEN_DAYS_MS;
   const variant = roleVariant(node.role);
 
   const fallbackName = ROLE_LABELS[node.role ?? 2] ?? 'Unknown Device';
@@ -71,7 +71,7 @@ export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive }) => {
     ? 'STALE'
     : node.is_online ? 'ONLINE' : 'OFFLINE';
   const statusColor = isStale
-    ? 'var(--amber)'
+    ? 'var(--danger)'
     : node.is_online ? 'var(--online)' : 'var(--offline)';
 
   return (

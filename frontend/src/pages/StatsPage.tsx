@@ -56,8 +56,8 @@ interface ChartData {
     totalPackets24h:  number;
     totalPackets7d:   number;
     uniqueRadios24h:  number;
-    avgRssi24h:       number | null;
-    avgSnr24h:        number | null;
+    activeRepeaters:  number;
+    staleRepeaters:   number;
     peakHour:         string | null;
     peakHourCount:    number;
   };
@@ -147,14 +147,16 @@ export const StatsPage: React.FC = () => {
                 color={C_AMBER}
               />
               <StatCard
-                label="Avg RSSI (24h)"
-                value={data.summary.avgRssi24h != null ? `${data.summary.avgRssi24h} dBm` : '—'}
-                color={C_PURPLE}
+                label="Active repeaters"
+                value={fmt(data.summary.activeRepeaters)}
+                sub="seen in last 7 days"
+                color={C_GREEN}
               />
               <StatCard
-                label="Avg SNR (24h)"
-                value={data.summary.avgSnr24h != null ? `${data.summary.avgSnr24h} dB` : '—'}
-                color={C_ORANGE}
+                label="Stale repeaters"
+                value={fmt(data.summary.staleRepeaters)}
+                sub="not seen in 7 days"
+                color={C_AMBER}
               />
             </div>
 

@@ -1131,6 +1131,65 @@ html, body, #root {
 .oss-banner a:not(.site-btn) { color: var(--accent); text-decoration: none; }
 .oss-banner a:not(.site-btn):hover { text-decoration: underline; }
 
+/* ── Packet type cards ──────────────────────────────────────────────────── */
+.packet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+.packet-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  transition: border-color var(--transition);
+}
+.packet-card:hover { border-color: var(--border-bright); }
+.packet-card__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.packet-card__code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--border-bright);
+  border-radius: 4px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  letter-spacing: 0.05em;
+}
+.packet-card__name {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.packet-card__label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  font-family: var(--font-mono);
+}
+.packet-card__desc {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+.packet-card__detail {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.6;
+}
+
 /* ── Footer ────────────────────────────────────────────────────────────── */
 .site-footer {
   display: flex;

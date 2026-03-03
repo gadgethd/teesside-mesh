@@ -39,7 +39,7 @@ const MeshIcon: React.FC = () => (
   </svg>
 );
 
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 
 const PATH_TTL = 5_000; // ms to display packet path before auto-clearing
 
@@ -152,7 +152,7 @@ export const App: React.FC = () => {
 
   const mapNodes = useMemo(() => Array.from(nodes.values()).filter(
     (n) => n.lat && n.lon
-      && Date.now() - new Date(n.last_seen).getTime() < SEVEN_DAYS_MS
+      && Date.now() - new Date(n.last_seen).getTime() < FOURTEEN_DAYS_MS
       && !n.name?.includes('🚫')
       && (n.role === undefined || n.role === 2)
   ).length, [nodes]); // eslint-disable-line react-hooks/exhaustive-deps
