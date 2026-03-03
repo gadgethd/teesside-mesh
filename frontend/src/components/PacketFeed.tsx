@@ -34,7 +34,7 @@ export const PacketFeed: React.FC<Props> = React.memo(({ packets, nodes }) => (
         : content;
 
       const advertBadge = p.packetType === 4 && typeof p.advertCount === 'number'
-        ? (p.advertCount === 1 ? 'new' : `${p.advertCount}`)
+        ? (p.advertCount === 1 ? 'NEW' : `${p.advertCount}`)
         : undefined;
 
       return (
