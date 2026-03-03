@@ -162,6 +162,64 @@ MeshCore Devices
 
 ---
 
+## Acknowledgements
+
+This project is built on the following open source libraries and tools:
+
+### Frontend
+| Package | License |
+|---|---|
+| [React](https://react.dev) | MIT |
+| [Vite](https://vitejs.dev) | MIT |
+| [TypeScript](https://www.typescriptlang.org) | Apache 2.0 |
+| [Leaflet](https://leafletjs.com) | BSD 2-Clause |
+| [react-leaflet](https://react-leaflet.js.org) | Hippocratic 2.1 |
+| [deck.gl](https://deck.gl) | MIT |
+| [react-router-dom](https://reactrouter.com) | MIT |
+| [Recharts](https://recharts.org) | MIT |
+| [polygon-clipping](https://github.com/mfogel/polygon-clipping) | MIT |
+
+### Backend
+| Package | License |
+|---|---|
+| [Express](https://expressjs.com) | MIT |
+| [MQTT.js](https://github.com/mqttjs/MQTT.js) | MIT |
+| [ws](https://github.com/websockets/ws) | MIT |
+| [ioredis](https://github.com/redis/ioredis) | MIT |
+| [node-postgres](https://node-postgres.com) | MIT |
+| [cors](https://github.com/expressjs/cors) | MIT |
+| [express-rate-limit](https://github.com/express-rate-limit/express-rate-limit) | MIT |
+| [@michaelhart/meshcore-decoder](https://www.npmjs.com/package/@michaelhart/meshcore-decoder) | MIT |
+
+### Viewshed worker (Python)
+| Package | License |
+|---|---|
+| [NumPy](https://numpy.org) | BSD 3-Clause |
+| [SciPy](https://scipy.org) | BSD 3-Clause |
+| [Shapely](https://shapely.readthedocs.io) | BSD 3-Clause |
+| [rasterio](https://rasterio.readthedocs.io) | BSD 3-Clause |
+| [psycopg2](https://www.psycopg.org) | LGPL v3 |
+| [redis-py](https://github.com/redis/redis-py) | MIT |
+| [Requests](https://requests.readthedocs.io) | Apache 2.0 |
+
+### Infrastructure
+| Tool | License |
+|---|---|
+| [TimescaleDB](https://www.timescale.com) | Apache 2.0 (Community) |
+| [Redis](https://redis.io) | BSD 3-Clause |
+| [Eclipse Mosquitto](https://mosquitto.org) | EPL 2.0 / EDL 1.0 |
+| [Docker](https://www.docker.com) | Apache 2.0 |
+
+### Data
+| Source | License |
+|---|---|
+| [SRTM Elevation Data](https://registry.opendata.aws/terrain-tiles) | Public Domain (NASA) |
+| [Natural Earth](https://www.naturalearthdata.com) | Public Domain |
+
+---
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+This project is licensed under MIT — see [LICENSE](LICENSE).
+
+**Note on dependencies:** react-leaflet (Hippocratic License 2.1) and Eclipse Mosquitto (EPL 2.0) are used as dependencies but not modified or redistributed. All other runtime dependencies use MIT, BSD, or Apache 2.0 licenses. The Hippocratic License adds ethical use clauses not present in standard open source licenses.
