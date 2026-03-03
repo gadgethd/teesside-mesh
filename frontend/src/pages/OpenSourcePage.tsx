@@ -66,7 +66,7 @@ export const OpenSourcePage: React.FC = () => (
       <div className="site-content">
         <h1 className="site-page-hero__title">Open Source</h1>
         <p className="site-page-hero__sub">
-          This project is built entirely on free, open-source software, and it will be open-sourced itself soon.
+          This project is built entirely on free, open-source software, and the full source code is available on GitHub.
         </p>
       </div>
     </section>
@@ -77,14 +77,21 @@ export const OpenSourcePage: React.FC = () => (
         <div className="oss-banner">
           <span className="oss-banner__icon">⚗️</span>
           <div>
-            <strong>This project will be open source soon</strong>
+            <strong>The source code is on GitHub</strong>
             <p>
-              The full source code for this dashboard (backend, frontend, viewshed worker, Docker
-              setup, and all) will be published on GitHub. If you'd like to be notified when it's
-              available, watch the{' '}
-              <a href="https://discord.gg/bSuST8xvet" target="_blank" rel="noopener noreferrer">Discord</a>{' '}
-              for the announcement.
+              The full source code for this dashboard — backend, frontend, viewshed worker, and
+              Docker setup — is publicly available. If you run a MeshCore network and want to set up
+              your own analytics instance, everything you need is there.
             </p>
+            <a
+              href="https://github.com/gadgethd/meshcore-analytics"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="site-btn site-btn--primary"
+              style={{ display: 'inline-block', marginTop: 12 }}
+            >
+              View on GitHub
+            </a>
           </div>
         </div>
       </section>
