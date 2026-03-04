@@ -570,7 +570,7 @@ def process_link_job(db, r_client, job: dict):
         for i in range(len(full) - 1):
             src_id, src = full[i]    # transmitted
             dst_id, dst = full[i + 1]  # received
-            if not src['lat'] or not dst['lat']:
+            if src['lat'] is None or src['lon'] is None or dst['lat'] is None or dst['lon'] is None:
                 continue
 
             # Canonical ordering (lower ID first) → unique primary key
@@ -593,16 +593,20 @@ def process_link_job(db, r_client, job: dict):
                              last_observed  = NOW(),
                              count_a_to_b   = node_links.count_a_to_b + %s,
                              count_b_to_a   = node_links.count_b_to_a + %s
-                       RETURNING observed_count, itm_computed_at''',
+                       RETURNING observed_count, itm_computed_at, itm_path_loss_db, itm_viable, count_a_to_b, count_b_to_a''',
                     (a_id, b_id, inc_atob, inc_btoa, inc_atob, inc_btoa),
                 )
                 row = cur.fetchone()
-            obs_count      = row[0] if row else 1
-            itm_computed   = row[1] if row else None
+            obs_count       = row[0] if row else 1
+            itm_computed    = row[1] if row else None
+            path_loss_db_db = row[2] if row else None
+            itm_viable_db   = row[3] if row else None
+            count_a_to_b    = row[4] if row else inc_atob
+            count_b_to_a    = row[5] if row else inc_btoa
 
             # Compute ITM path loss if not yet done and tiles are cached
-            path_loss_db: Optional[float] = None
-            itm_viable:   Optional[bool]  = None
+            path_loss_db: Optional[float] = path_loss_db_db
+            itm_viable:   Optional[bool]  = itm_viable_db
             if itm_computed is None:
                 vrt = build_link_vrt(a['lat'], a['lon'], b['lat'], b['lon'], tmp)
                 if vrt:
@@ -621,6 +625,7 @@ def process_link_job(db, r_client, job: dict):
                                    WHERE node_a_id = %s AND node_b_id = %s''',
                                 (round(path_loss_db, 1), itm_viable, a_id, b_id),
                             )
+                        path_loss_db = round(path_loss_db, 1)
                         log.info(
                             f'Link {a_id[:8]}…↔{b_id[:8]}…: '
                             f'{path_loss_db:.1f} dB {"✓" if itm_viable else "✗"} '
@@ -638,6 +643,8 @@ def process_link_job(db, r_client, job: dict):
                     'observed_count':   obs_count,
                     'itm_path_loss_db': path_loss_db,
                     'itm_viable':       itm_viable,
+                    'count_a_to_b':     count_a_to_b,
+                    'count_b_to_a':     count_b_to_a,
                 },
                 'ts': int(time.time() * 1000),
             }))

@@ -52,6 +52,10 @@ function ringToLatLng(ring: number[][]): LatLngExpression[] {
   return ring.map(([lon, lat]) => [lat, lon] as LatLngExpression);
 }
 
+function hasCoords(node: MeshNode | null | undefined): node is MeshNode & { lat: number; lon: number } {
+  return typeof node?.lat === 'number' && typeof node?.lon === 'number';
+}
+
 // Raw outer rings from each coverage polygon — used for the green coverage display.
 // Using raw rings (not a union) with fillRule:'nonzero' means:
 //   - overlapping viewsheds: winding numbers add (+1 per CCW ring) → always filled ✓
@@ -163,7 +167,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
   const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
   const allNodesWithPos = useMemo(() => Array.from(nodes.values()).filter(
-    (n) => n.lat && n.lon
+    (n) => hasCoords(n)
       && (Date.now() - new Date(n.last_seen).getTime()) < FOURTEEN_DAYS_MS
       && !n.name?.includes('🚫')
   ), [nodes]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -171,6 +175,11 @@ export const MapView: React.FC<MapViewProps> = ({
   const clientNodesArr = useMemo(() => allNodesWithPos.filter((n) => n.role === 1 || n.role === 3), [allNodesWithPos]);
 
   const coverageRings = useCoverageDisplayRings(coverage);
+  const coverageByNodeId = useMemo(() => {
+    const m = new Map<string, NodeCoverage>();
+    for (const c of coverage) m.set(c.node_id, c);
+    return m;
+  }, [coverage]);
 
   // Resolve viable link pairs to lat/lon polyline positions
   const linkLines = useMemo(() => {
@@ -179,7 +188,7 @@ export const MapView: React.FC<MapViewProps> = ({
     for (const [aId, bId] of viablePairsArr) {
       const a = nodes.get(aId);
       const b = nodes.get(bId);
-      if (a?.lat && a?.lon && b?.lat && b?.lon) {
+      if (hasCoords(a) && hasCoords(b)) {
         lines.push([[a.lat, a.lon], [b.lat, b.lon]]);
       }
     }
@@ -252,7 +261,7 @@ export const MapView: React.FC<MapViewProps> = ({
             key={node.node_id}
             node={node}
             isActive={activeNodes.has(node.node_id)}
-            nodeCoverage={coverage.find((c) => c.node_id === node.node_id)}
+            nodeCoverage={coverageByNodeId.get(node.node_id)}
           />
         ))}
 
@@ -262,7 +271,7 @@ export const MapView: React.FC<MapViewProps> = ({
             key={node.node_id}
             node={node}
             isActive={activeNodes.has(node.node_id)}
-            nodeCoverage={coverage.find((c) => c.node_id === node.node_id)}
+            nodeCoverage={coverageByNodeId.get(node.node_id)}
           />
         ))}
 

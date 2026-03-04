@@ -92,9 +92,10 @@ export const StatsPage: React.FC = () => {
   const [data, setData]       = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const network = (import.meta.env['VITE_SITE'] === 'ukmesh') ? 'ukmesh' : 'teesside';
 
   const load = () => {
-    fetch('https://app.teessidemesh.com/api/stats/charts')
+    fetch(`/api/stats/charts?network=${network}`)
       .then(r => r.json())
       .then((d: ChartData) => { setData(d); setLoading(false); setLastUpdate(new Date()); })
       .catch(() => setLoading(false));

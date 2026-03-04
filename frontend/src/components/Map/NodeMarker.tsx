@@ -94,7 +94,7 @@ export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive, nodeCov
     timerRef.current = setTimeout(() => setShowPreview(false), PREVIEW_TTL_MS);
   };
 
-  if (!node.lat || !node.lon) return null;
+  if (typeof node.lat !== 'number' || typeof node.lon !== 'number') return null;
 
   const ageMs   = Date.now() - new Date(node.last_seen).getTime();
   const isStale = ageMs > SEVEN_DAYS_MS;
@@ -120,7 +120,7 @@ export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive, nodeCov
         <Popup eventHandlers={{
           add: () => {
             if (links !== null) return; // already fetched
-            fetch(`https://app.teessidemesh.com/api/nodes/${node.node_id}/links`)
+            fetch(`/api/nodes/${node.node_id}/links`)
               .then((r) => r.json())
               .then((data: NodeLink[]) => setLinks(data))
               .catch(() => setLinks([]));

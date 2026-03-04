@@ -40,10 +40,11 @@ const StatCard: React.FC<{ value: number; label: string; suffix?: string; format
 export const UKHomePage: React.FC = () => {
   const [stats, setStats] = useState<SiteStats>({ packetsDay: 0, totalNodes: 0, longestHop: 0, longestHopHash: null });
   const hopFlash = useFlash(stats.longestHop);
+  const network = 'ukmesh';
 
   useEffect(() => {
     const fetch_ = () =>
-      fetch('/api/stats')
+      fetch(`/api/stats?network=${network}`)
         .then(r => r.json())
         .then(d => setStats({ packetsDay: d.packetsDay, totalNodes: d.totalNodes, longestHop: d.longestHop, longestHopHash: d.longestHopHash ?? null }))
         .catch(() => {});

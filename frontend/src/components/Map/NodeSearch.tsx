@@ -16,7 +16,7 @@ export const NodeSearch: React.FC<NodeSearchProps> = ({ nodes, map }) => {
     if (!query.trim()) return [];
     const q = query.toLowerCase();
     return Array.from(nodes.values())
-      .filter((n) => n.lat && n.lon && n.name && !n.name.includes('🚫') && n.name.toLowerCase().includes(q))
+      .filter((n) => typeof n.lat === 'number' && typeof n.lon === 'number' && n.name && !n.name.includes('🚫') && n.name.toLowerCase().includes(q))
       .slice(0, 6);
   }, [query, nodes]);
 

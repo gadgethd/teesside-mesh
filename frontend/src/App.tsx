@@ -64,7 +64,7 @@ function resolvePathWaypoints(
   for (let i = 0; i < N; i++) {
     const prefix = pathHashes[i]!.toUpperCase();
     const candidates = Array.from(allNodes.values()).filter(
-      (n) => n.lat && n.lon && !n.name?.includes('🚫') && n.node_id.toUpperCase().startsWith(prefix),
+      (n) => hasCoords(n) && !n.name?.includes('🚫') && n.node_id.toUpperCase().startsWith(prefix),
     );
     if (candidates.length === 0) continue;
 
@@ -104,9 +104,21 @@ function resolvePathWaypoints(
 const MAX_BETA_HOPS = 15;
 const MIN_LINK_OBSERVATIONS = 5; // must match backend db/index.ts
 
+type LinkMetrics = {
+  observed_count: number;
+  itm_viable?: boolean | null;
+  itm_path_loss_db?: number | null;
+  count_a_to_b?: number;
+  count_b_to_a?: number;
+};
+
 /** Canonical lookup key for a link between two nodes (order-independent). */
 function linkKey(a: string, b: string): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+function hasCoords(node: MeshNode | null | undefined): node is MeshNode & { lat: number; lon: number } {
+  return typeof node?.lat === 'number' && typeof node?.lon === 'number';
 }
 
 function distKm(a: MeshNode, b: MeshNode): number {
@@ -171,19 +183,79 @@ function resolveBetaPath(
   allNodes: Map<string, MeshNode>,
   coverage: NodeCoverage[],
   linkPairs: Set<string>,
+  linkMetrics: Map<string, LinkMetrics>,
 ): { path: [number, number][]; confidence: number } | null {
-  if (!rx.lat || !rx.lon || pathHashes.length === 0) return null;
+  if (!hasCoords(rx) || pathHashes.length === 0) return null;
   if (pathHashes.length >= MAX_BETA_HOPS) return null;
+  const rxLat = rx.lat;
+  const rxLon = rx.lon;
 
   type HopResult = { node: MeshNode; conf: number } | null; // null = skipped
+  const candidatesPool = Array.from(allNodes.values()).filter(
+    (n) => hasCoords(n) && (n.role === undefined || n.role === 2) && !n.name?.includes('🚫'),
+  );
+  const prefixCounts = new Map<string, number>();
+  for (const n of candidatesPool) {
+    const p = n.node_id.slice(0, 2).toUpperCase();
+    prefixCounts.set(p, (prefixCounts.get(p) ?? 0) + 1);
+  }
+
+  const totalDist = hasCoords(src) ? distKm(src, rx) : 0;
+  const corridorMaxKm = Math.max(8, Math.min(35, totalDist * 0.25));
+
+  function inCorridor(candidate: MeshNode, prevNode: MeshNode): boolean {
+    if (!hasCoords(src)) return true;
+
+    const bx = src.lon - rxLon;
+    const by = src.lat - rxLat;
+    const segLen2 = bx * bx + by * by;
+    if (segLen2 < 1e-9) return true;
+
+    const px = candidate.lon! - rxLon;
+    const py = candidate.lat! - rxLat;
+    const t = (px * bx + py * by) / segLen2;
+    if (t < -0.15 || t > 1.15) return false;
+
+    const projx = rxLon + t * bx;
+    const projy = rxLat + t * by;
+    const midLat = ((candidate.lat! + projy) / 2) * (Math.PI / 180);
+    const kmPerLon = 111 * Math.cos(midLat);
+    const dxKm = (candidate.lon! - projx) * kmPerLon;
+    const dyKm = (candidate.lat! - projy) * 111;
+    const crossTrackKm = Math.hypot(dxKm, dyKm);
+    if (crossTrackKm > corridorMaxKm) return false;
+
+    // Backward search should generally move us toward src, not away.
+    return distKm(candidate, src) <= distKm(prevNode, src) + 8;
+  }
+
+  function directionalSupport(meta: LinkMetrics | undefined, fromId: string, toId: string): number {
+    if (!meta || meta.count_a_to_b == null || meta.count_b_to_a == null) return 0.5;
+    const a = fromId < toId ? fromId : toId;
+    const forward = fromId === a ? meta.count_a_to_b : meta.count_b_to_a;
+    const reverse = fromId === a ? meta.count_b_to_a : meta.count_a_to_b;
+    const total = forward + reverse;
+    if (total <= 0) return 0.5;
+    return forward / total;
+  }
+
+  function confirmedConfidence(meta: LinkMetrics | undefined, fromId: string, toId: string): number {
+    const observed = meta?.observed_count ?? MIN_LINK_OBSERVATIONS;
+    const obsBoost = Math.min(0.18, Math.log10(1 + observed) * 0.12);
+    const pathLoss = meta?.itm_path_loss_db;
+    const plPenalty = pathLoss == null ? 0 : Math.min(0.12, Math.max(0, (pathLoss - 130) / 120));
+    const dirBoost = (directionalSupport(meta, fromId, toId) - 0.5) * 0.12;
+    const viableBoost = meta?.itm_viable === false ? -0.1 : 0.05;
+    const conf = 0.68 + obsBoost + dirBoost + viableBoost - plPenalty;
+    return Math.max(0.45, Math.min(0.98, conf));
+  }
 
   /** Ordered candidate list for a single hop: confirmed neighbours first, then reachable,
    *  then a last-resort closest match within 50 km. A hop is only skipped when no node
    *  in the DB has the matching 2-char prefix at all. */
   function getCandidates(prefix: string, prevNode: MeshNode): Array<{ node: MeshNode; conf: number }> {
-    const all = Array.from(allNodes.values()).filter(
-      (n) => n.lat && n.lon && (n.role === undefined || n.role === 2)
-        && !n.name?.includes('🚫') && n.node_id.toUpperCase().startsWith(prefix),
+    const all = candidatesPool.filter(
+      (n) => n.node_id.toUpperCase().startsWith(prefix),
     );
     if (all.length === 0) return [];
 
@@ -191,7 +263,7 @@ function resolveBetaPath(
     // Returns 1 (perfectly aligned toward src), 0 (perpendicular), -1 (opposite).
     // Falls back to 0 when src is unknown.
     function align(c: MeshNode): number {
-      if (!src?.lat || !src?.lon) return 0;
+      if (!hasCoords(src)) return 0;
       const dLat = src.lat! - prevNode.lat!;
       const dLon = src.lon! - prevNode.lon!;
       const cLat = c.lat! - prevNode.lat!;
@@ -205,7 +277,8 @@ function resolveBetaPath(
     // 50 km normaliser means alignment dominates at short range and distance
     // penalises equally at the 50 km fallback boundary.
     function sortScore(c: MeshNode): number {
-      return align(c) - distKm(c, prevNode) / 50;
+      const corridorBonus = inCorridor(c, prevNode) ? 0.25 : -0.6;
+      return align(c) - distKm(c, prevNode) / 50 + corridorBonus;
     }
 
     const usedIds = new Set<string>();
@@ -213,17 +286,26 @@ function resolveBetaPath(
     const confirmed = all
       .filter((c) => linkPairs.has(linkKey(c.node_id, prevNode.node_id)))
       .sort((a, b) => sortScore(b) - sortScore(a))
-      .map((c) => { usedIds.add(c.node_id); return { node: c, conf: 0.9 }; });
+      .slice(0, 4)
+      .map((c) => {
+        usedIds.add(c.node_id);
+        const meta = linkMetrics.get(linkKey(c.node_id, prevNode.node_id));
+        return { node: c, conf: confirmedConfidence(meta, c.node_id, prevNode.node_id) };
+      });
 
     const reachable = all
-      .filter((c) => !usedIds.has(c.node_id) && canReach(c, prevNode, coverage) && hasLoS(c, prevNode))
+      .filter((c) => !usedIds.has(c.node_id) && inCorridor(c, prevNode) && canReach(c, prevNode, coverage) && hasLoS(c, prevNode))
       .sort((a, b) => sortScore(b) - sortScore(a))
-      .slice(0, 2)
-      .map((c) => { usedIds.add(c.node_id); return { node: c, conf: 0.3 / Math.max(1, all.length) }; });
+      .slice(0, 3)
+      .map((c) => {
+        usedIds.add(c.node_id);
+        const distancePenalty = Math.min(0.12, distKm(c, prevNode) / 120);
+        return { node: c, conf: Math.max(0.08, 0.28 - distancePenalty - (all.length - 1) * 0.01) };
+      });
 
     // Last resort: prefix match within 50 km with LOS clearance, sorted toward src.
     const fallback = all
-      .filter((c) => !usedIds.has(c.node_id) && distKm(c, prevNode) < 50 && hasLoS(c, prevNode))
+      .filter((c) => !usedIds.has(c.node_id) && inCorridor(c, prevNode) && distKm(c, prevNode) < 50 && hasLoS(c, prevNode))
       .sort((a, b) => sortScore(b) - sortScore(a))
       .slice(0, 1)
       .map((c) => ({ node: c, conf: 0.05 / Math.max(1, all.length) }));
@@ -234,8 +316,12 @@ function resolveBetaPath(
   // Allow at most 2 skips, and no more than 1 per 3 hops.
   // Prevents degenerate paths where most relays are skipped due to sparse data.
   const maxSkips = Math.min(2, Math.floor(pathHashes.length / 3));
-  // Hard limit on total DFS calls to prevent exponential blowup on ambiguous prefixes.
-  let budget = 300;
+  // Dynamic DFS budget: scales with hops + prefix ambiguity while capping worst-case cost.
+  const ambiguity = pathHashes.reduce(
+    (sum, h) => sum + (prefixCounts.get(h.slice(0, 2).toUpperCase()) ?? 0),
+    0,
+  );
+  let budget = Math.max(180, Math.min(1600, 90 + pathHashes.length * 30 + ambiguity * 18));
 
   /**
    * Recursive DFS. Returns the hop results (rx-to-src order) or null if budget
@@ -273,10 +359,15 @@ function resolveBetaPath(
   const hops = [...raw].reverse().filter((r): r is { node: MeshNode; conf: number } => r !== null);
   if (hops.length === 0) return null;
 
-  const confidence = hops.reduce((sum, h) => sum + h.conf, 0) / hops.length;
+  const totalHops = raw.length;
+  const skipped = totalHops - hops.length;
+  const meanHopConfidence = hops.reduce((sum, h) => sum + h.conf, 0) / hops.length;
+  const resolvedRatio = hops.length / totalHops;
+  const skipPenalty = Math.max(0.2, 1 - skipped * 0.28);
+  const confidence = Math.max(0, Math.min(1, meanHopConfidence * resolvedRatio * skipPenalty));
 
   const pathNodes: MeshNode[] = [
-    ...(src?.lat && src?.lon ? [src] : []),
+    ...(hasCoords(src) ? [src] : []),
     ...hops.map((h) => h.node),
     rx,
   ];
@@ -322,6 +413,7 @@ export const App: React.FC = () => {
   const [stats, setStats]           = useState({ mqttNodes: 0, staleNodes: 0, packetsDay: 0 });
   const [map, setMap]               = useState<LeafletMap | null>(null);
   const [linkPairs, setLinkPairs]       = useState<Set<string>>(new Set());
+  const [linkMetrics, setLinkMetrics]   = useState<Map<string, LinkMetrics>>(new Map());
   const [viablePairsArr, setViablePairsArr] = useState<[string, string][]>([]);
   const [showDisclaimer, setShowDisclaimer] = useState(() => !localStorage.getItem(DISCLAIMER_KEY));
   const [packetPath, setPacketPath]         = useState<[number, number][] | null>(null);
@@ -348,7 +440,7 @@ export const App: React.FC = () => {
   const { coverage, handleCoverageUpdate } = useCoverage(networkFilter);
 
   const mapNodes = useMemo(() => Array.from(nodes.values()).filter(
-    (n) => n.lat && n.lon
+    (n) => hasCoords(n)
       && Date.now() - new Date(n.last_seen).getTime() < FOURTEEN_DAYS_MS
       && !n.name?.includes('🚫')
       && (n.role === undefined || n.role === 2)
@@ -393,9 +485,9 @@ export const App: React.FC = () => {
     const rx = latest?.rxNodeId ? nodes.get(latest.rxNodeId) : undefined;
 
     // ── Regular packet path ────────────────────────────────────────────────────
-    if (filters.packetPaths && latest?.rxNodeId && (latest.path?.length || latest.srcNodeId) && rx?.lat && rx?.lon) {
+    if (filters.packetPaths && latest?.rxNodeId && (latest.path?.length || latest.srcNodeId) && hasCoords(rx)) {
       const src = latest.srcNodeId ? (nodes.get(latest.srcNodeId) ?? null) : null;
-      const srcWithPos = src?.lat && src?.lon ? src : null;
+      const srcWithPos = hasCoords(src) ? src : null;
       const waypoints = latest.path?.length
         ? resolvePathWaypoints(latest.path, srcWithPos, rx, nodes)
         : [[srcWithPos!.lat!, srcWithPos!.lon!], [rx.lat, rx.lon]] as [number, number][];
@@ -405,13 +497,13 @@ export const App: React.FC = () => {
     }
 
     // ── Beta path (unambiguous hops + coverage validation) ────────────────────
-    if (filters.betaPaths && latest?.rxNodeId && latest.path?.length && rx?.lat && rx?.lon) {
+    if (filters.betaPaths && latest?.rxNodeId && latest.path?.length && hasCoords(rx)) {
       const src    = latest.srcNodeId ? (nodes.get(latest.srcNodeId) ?? null) : null;
       const hops   = latest.hopCount != null ? latest.path.slice(0, latest.hopCount) : latest.path;
       const result = resolveBetaPath(
         hops,
-        src?.lat && src?.lon ? src : null,
-        rx, nodes, coverage, linkPairs,
+        hasCoords(src) ? src : null,
+        rx, nodes, coverage, linkPairs, linkMetrics,
       );
       setBetaPacketPath(result && result.confidence >= filters.betaPathThreshold ? result.path : null);
     } else {
@@ -440,7 +532,7 @@ export const App: React.FC = () => {
       pathFadeRef.current = requestAnimationFrame(animate);
     }, PATH_TTL - 1_000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestId, filters.packetPaths, filters.betaPaths, pinnedPacketId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [latestId, filters.packetPaths, filters.betaPaths, pinnedPacketId, linkMetrics]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePacketPin = useCallback((packet: AggregatedPacket) => {
     // Toggle: clicking the already-pinned packet unpins it
@@ -464,13 +556,13 @@ export const App: React.FC = () => {
 
     setPacketPath(null);
 
-    if (packet.rxNodeId && packet.path?.length && rx?.lat && rx?.lon) {
+    if (packet.rxNodeId && packet.path?.length && hasCoords(rx)) {
       const src  = packet.srcNodeId ? (nodes.get(packet.srcNodeId) ?? null) : null;
       const hops = packet.hopCount != null ? packet.path.slice(0, packet.hopCount) : packet.path;
       const result = resolveBetaPath(
-        hops, src?.lat && src?.lon ? src : null, rx, nodes, coverage, linkPairs,
+        hops, hasCoords(src) ? src : null, rx, nodes, coverage, linkPairs, linkMetrics,
       );
-      setBetaPacketPath(result ? result.path : null);
+      setBetaPacketPath(result && result.confidence >= filters.betaPathThreshold ? result.path : null);
     } else {
       setBetaPacketPath(null);
     }
@@ -497,9 +589,9 @@ export const App: React.FC = () => {
         }
       };
       pathFadeRef.current = requestAnimationFrame(animate);
-    }, 9_000);
+    }, 30_000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinnedPacketId, nodes, coverage, linkPairs, filters.betaPaths, filters.betaPathThreshold]);
+  }, [pinnedPacketId, nodes, coverage, linkPairs, linkMetrics, filters.betaPaths, filters.betaPathThreshold]);
 
   const handleMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'initial_state') {
@@ -507,9 +599,21 @@ export const App: React.FC = () => {
         viable_pairs?: [string, string][];
       };
       handleInitialState(data);
-      if (data.viable_pairs) {
-        setLinkPairs(new Set(data.viable_pairs.map(([a, b]) => linkKey(a, b))));
-        setViablePairsArr(data.viable_pairs);
+      const viablePairs = data.viable_pairs;
+      if (viablePairs) {
+        const nextPairs = new Set(viablePairs.map(([a, b]) => linkKey(a, b)));
+        setLinkPairs(nextPairs);
+        setLinkMetrics(() => {
+          const metrics = new Map<string, LinkMetrics>();
+          for (const [a, b] of viablePairs) {
+            metrics.set(linkKey(a, b), {
+              observed_count: MIN_LINK_OBSERVATIONS,
+              itm_viable: true,
+            });
+          }
+          return metrics;
+        });
+        setViablePairsArr(viablePairs);
       }
     } else if (msg.type === 'packet') {
       handlePacket(msg.data as LivePacketData);
@@ -523,9 +627,24 @@ export const App: React.FC = () => {
       const d = msg.data as {
         node_a_id: string; node_b_id: string;
         observed_count: number; itm_viable: boolean | null;
+        itm_path_loss_db?: number | null;
+        count_a_to_b?: number;
+        count_b_to_a?: number;
       };
+      const key = linkKey(d.node_a_id, d.node_b_id);
+      setLinkMetrics((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(key);
+        next.set(key, {
+          observed_count: Math.max(existing?.observed_count ?? 0, d.observed_count ?? 0),
+          itm_viable: d.itm_viable ?? existing?.itm_viable ?? null,
+          itm_path_loss_db: d.itm_path_loss_db ?? existing?.itm_path_loss_db ?? null,
+          count_a_to_b: d.count_a_to_b ?? existing?.count_a_to_b,
+          count_b_to_a: d.count_b_to_a ?? existing?.count_b_to_a,
+        });
+        return next;
+      });
       if (d.itm_viable && d.observed_count >= MIN_LINK_OBSERVATIONS) {
-        const key = linkKey(d.node_a_id, d.node_b_id);
         setLinkPairs((prev) => {
           if (prev.has(key)) return prev;
           const next = new Set(prev);

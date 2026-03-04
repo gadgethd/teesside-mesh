@@ -187,7 +187,8 @@ export function useNodes() {
         setNodes((currentNodes) => {
           const prev = currentNodes.get(prevObserverId);
           const curr = currentNodes.get(packet.rxNodeId!);
-          if (prev?.lat && prev?.lon && curr?.lat && curr?.lon) {
+          if (typeof prev?.lat === 'number' && typeof prev?.lon === 'number'
+            && typeof curr?.lat === 'number' && typeof curr?.lon === 'number') {
             const arc: PacketArc = {
               id:         packet.id,
               from:       [prev.lon, prev.lat],

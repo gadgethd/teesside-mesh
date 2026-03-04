@@ -3,7 +3,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 export type WSReadyState = 'connecting' | 'connected' | 'disconnected';
 
 export interface WSMessage {
-  type: 'packet' | 'node_update' | 'node_upsert' | 'initial_state' | 'coverage_update';
+  type: 'packet' | 'node_update' | 'node_upsert' | 'initial_state' | 'coverage_update' | 'link_update';
   data: unknown;
   ts: number;
 }
@@ -14,11 +14,19 @@ export function useWebSocket(onMessage: MessageHandler, network?: string) {
   const [readyState, setReadyState] = useState<WSReadyState>('connecting');
   const wsRef   = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldReconnectRef = useRef(true);
+  const retryDelayRef = useRef(3000);
   const handlerRef = useRef(onMessage);
   handlerRef.current = onMessage;
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!shouldReconnectRef.current) return;
+
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const suffix   = network ? `?network=${encodeURIComponent(network)}` : '';
@@ -29,6 +37,7 @@ export function useWebSocket(onMessage: MessageHandler, network?: string) {
 
     ws.onopen = () => {
       setReadyState('connected');
+      retryDelayRef.current = 3000;
       console.log('[ws] connected');
     };
 
@@ -42,20 +51,26 @@ export function useWebSocket(onMessage: MessageHandler, network?: string) {
     };
 
     ws.onclose = () => {
+      if (!shouldReconnectRef.current) return;
       setReadyState('disconnected');
-      console.log('[ws] disconnected — reconnecting in 3s');
-      timerRef.current = setTimeout(connect, 3000);
+      const delay = retryDelayRef.current;
+      retryDelayRef.current = Math.min(15000, retryDelayRef.current * 1.5);
+      console.log(`[ws] disconnected — reconnecting in ${Math.round(delay / 1000)}s`);
+      timerRef.current = setTimeout(connect, delay);
     };
 
     ws.onerror = () => {
       ws.close();
     };
-  }, []);
+  }, [network]);
 
   useEffect(() => {
+    shouldReconnectRef.current = true;
+    retryDelayRef.current = 3000;
     connect();
     return () => {
-      timerRef.current && clearTimeout(timerRef.current);
+      shouldReconnectRef.current = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
       wsRef.current?.close();
     };
   }, [connect]);
