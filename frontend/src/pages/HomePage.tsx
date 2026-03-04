@@ -43,7 +43,7 @@ export const HomePage: React.FC = () => {
 
   useEffect(() => {
     const fetch_ = () =>
-      fetch('/api/stats')
+      fetch('https://app.teessidemesh.com/api/stats')
         .then(r => r.json())
         .then(d => setStats({ packetsDay: d.packetsDay, totalNodes: d.totalNodes, longestHop: d.longestHop, longestHopHash: d.longestHopHash ?? null }))
         .catch(() => {});

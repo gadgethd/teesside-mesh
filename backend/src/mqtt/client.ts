@@ -4,7 +4,7 @@ import type {
   AdvertPayload, GroupTextPayload, TextMessagePayload,
   TracePayload, PathPayload, AckPayload,
 } from '@michaelhart/meshcore-decoder';
-import { insertPacket, upsertNode, incrementAdvertCount } from '../db/index.js';
+import { insertPacket, upsertNode, incrementAdvertCount, query } from '../db/index.js';
 import type { LivePacket } from '../types/index.js';
 
 type PacketCallback      = (packet: LivePacket) => void;
@@ -359,8 +359,41 @@ async function handleMessage(topic: string, rawPayload: Buffer): Promise<void> {
       payload:    innerPayload ?? json,
       rawHex,
       advertCount,
+      pathHashes: path,
     });
   } catch (err) {
     console.error('[mqtt] db insert failed', (err as Error).message);
   }
+}
+
+/**
+ * Decode all historical packets with raw_hex and queue link jobs for those with
+ * relay path data. Called once at startup when node_links is empty.
+ */
+export async function backfillHistoricalLinks(
+  queueFn: (rxNodeId: string, srcNodeId: string | undefined, path: string[], hopCount: number | undefined) => void,
+): Promise<void> {
+  const res = await query<{
+    rx_node_id: string; src_node_id: string | null; hop_count: number | null; raw_hex: string;
+  }>(
+    `SELECT DISTINCT ON (packet_hash)
+       rx_node_id, src_node_id, hop_count, raw_hex
+     FROM packets
+     WHERE rx_node_id IS NOT NULL AND raw_hex IS NOT NULL AND raw_hex != ''
+     ORDER BY packet_hash, time DESC`,
+  );
+
+  let queued = 0;
+  for (const row of res.rows) {
+    try {
+      const decoded = MeshCoreDecoder.decode(row.raw_hex, { keyStore });
+      if (decoded?.path && Array.isArray(decoded.path) && decoded.path.length > 0) {
+        queueFn(row.rx_node_id, row.src_node_id ?? undefined, decoded.path as string[], decoded.pathLength);
+        queued++;
+      }
+    } catch {
+      // Skip undecipherable packets
+    }
+  }
+  console.log(`[app] historical link backfill: queued ${queued} packets`);
 }

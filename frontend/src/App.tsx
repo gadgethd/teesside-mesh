@@ -6,7 +6,7 @@ import { FilterPanel, FILTER_ROWS, type Filters } from './components/FilterPanel
 import { StatsPanel } from './components/StatsPanel/StatsPanel.js';
 import { PacketFeed } from './components/PacketFeed.js';
 import { useWebSocket, type WSMessage, type WSReadyState } from './hooks/useWebSocket.js';
-import { useNodes, type LivePacketData, type MeshNode } from './hooks/useNodes.js';
+import { useNodes, type LivePacketData, type MeshNode, type AggregatedPacket } from './hooks/useNodes.js';
 import { useCoverage, type NodeCoverage } from './hooks/useCoverage.js';
 
 const DEFAULT_FILTERS: Filters = {
@@ -16,6 +16,7 @@ const DEFAULT_FILTERS: Filters = {
   packetPaths:       false,
   betaPaths:         false,
   betaPathThreshold: 0.5,
+  links:             false,
 };
 
 // Connectivity indicator
@@ -99,49 +100,42 @@ function resolvePathWaypoints(
 }
 
 // ── Beta path helpers ─────────────────────────────────────────────────────────
-// Effective range for a node: uses the stored radio-horizon radius from the
-// viewshed worker (computed from actual SRTM terrain elevation), clamped 50–80 km.
+
+const MAX_BETA_HOPS = 15;
+
+/** Canonical lookup key for a link between two nodes (order-independent). */
+function linkKey(a: string, b: string): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+function distKm(a: MeshNode, b: MeshNode): number {
+  const midLat = ((a.lat! + b.lat!) / 2) * (Math.PI / 180);
+  const dlat   = (a.lat! - b.lat!) * 111;
+  const dlon   = (a.lon! - b.lon!) * 111 * Math.cos(midLat);
+  return Math.hypot(dlat, dlon);
+}
+
+// Fallback range check (used when no ITM data exists for a pair).
 function nodeRange(nodeId: string, coverage: NodeCoverage[]): number {
   const cov = coverage.find((c) => c.node_id === nodeId);
   if (!cov?.radius_m) return 50;
   return Math.min(80, Math.max(50, cov.radius_m / 1000));
 }
-
-// Returns true if two nodes are within range of each other.
-// Threshold is the max of each node's elevation-derived range (50–80 km).
 function canReach(a: MeshNode, b: MeshNode, coverage: NodeCoverage[]): boolean {
   const threshold = Math.max(nodeRange(a.node_id, coverage), nodeRange(b.node_id, coverage));
-  const midLat    = ((a.lat! + b.lat!) / 2) * (Math.PI / 180);
-  const dlat      = (a.lat! - b.lat!) * 111;
-  const dlon      = (a.lon! - b.lon!) * 111 * Math.cos(midLat);
-  return Math.hypot(dlat, dlon) < threshold;
-}
-
-function pickByInterpolation(
-  candidates: MeshNode[],
-  src: MeshNode | null,
-  rx: MeshNode,
-  hopIndex: number,
-  totalHops: number,
-): MeshNode {
-  if (candidates.length === 1) return candidates[0]!;
-  if (!src?.lat || !src?.lon) return candidates[0]!;
-  const t      = (hopIndex + 1) / (totalHops + 1);
-  const expLat = src.lat + t * (rx.lat! - src.lat);
-  const expLon = src.lon + t * (rx.lon! - src.lon);
-  return candidates.reduce((a, b) =>
-    Math.hypot(a.lat! - expLat, a.lon! - expLon) <= Math.hypot(b.lat! - expLat, b.lon! - expLon) ? a : b,
-  );
+  return distKm(a, b) < threshold;
 }
 
 /**
- * Scores a beta path using per-hop confidence:
- *   - ambiguity factor:  1 / n_candidates  (fewer matches → more confident)
- *   - distance factor:   1.0 if chosen hop is within 50 km of prev node
- *                        0.3 if out of range
- *                        0.7 if prev node unknown (first hop, src unseen)
- * Last relay → rx is also distance-checked and penalised if out of range.
- * Returns null if any hop has zero known candidates.
+ * Beta path resolver — backtracking DFS working backwards from the receiver.
+ *
+ * For each relay prefix (reversed, so we start anchored at a known position):
+ *   1. Try confirmed neighbours of prevNode first (real observed link data).
+ *   2. If none, try candidates within mutual radio range (coverage-radius based).
+ *   3. If a chosen candidate leads to dead ends at subsequent hops, backtrack
+ *      and try the next candidate at this hop.
+ *   4. If no candidate leads to a valid continuation, skip this hop (up to
+ *      maxSkips total). Skips are bounded so the path can't just drop all hops.
  */
 function resolveBetaPath(
   pathHashes: string[],
@@ -149,55 +143,78 @@ function resolveBetaPath(
   rx: MeshNode,
   allNodes: Map<string, MeshNode>,
   coverage: NodeCoverage[],
+  linkPairs: Set<string>,
 ): { path: [number, number][]; confidence: number } | null {
   if (!rx.lat || !rx.lon || pathHashes.length === 0) return null;
+  if (pathHashes.length >= MAX_BETA_HOPS) return null;
 
-  const resolvedNodes: MeshNode[] = [];
-  const hopConfidences: number[]  = [];
-  let prevNode: MeshNode | null   = src?.lat && src?.lon ? src : null;
+  type HopResult = { node: MeshNode; conf: number } | null; // null = skipped
 
-  for (let i = 0; i < pathHashes.length; i++) {
-    const prefix     = pathHashes[i]!.slice(0, 2).toUpperCase();
-    const candidates = Array.from(allNodes.values()).filter(
+  /** Ordered candidate list for a single hop: confirmed neighbours first, then reachable. */
+  function getCandidates(prefix: string, prevNode: MeshNode): Array<{ node: MeshNode; conf: number }> {
+    const all = Array.from(allNodes.values()).filter(
       (n) => n.lat && n.lon && (n.role === undefined || n.role === 2)
         && !n.name?.includes('🚫') && n.node_id.toUpperCase().startsWith(prefix),
     );
-    if (candidates.length === 0) continue;
+    const confirmedSet = new Set<string>();
+    const confirmed = all
+      .filter((c) => linkPairs.has(linkKey(c.node_id, prevNode.node_id)))
+      .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
+      .map((c) => { confirmedSet.add(c.node_id); return { node: c, conf: 0.9 }; });
+    const reachable = all
+      .filter((c) => !confirmedSet.has(c.node_id) && canReach(c, prevNode, coverage))
+      .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
+      .slice(0, 2) // cap to top-2 to bound the search tree
+      .map((c) => ({ node: c, conf: 0.3 / Math.max(1, all.length) }));
+    return [...confirmed, ...reachable];
+  }
 
-    const ambiguityFactor = 1.0 / candidates.length;
-    let chosen: MeshNode;
-    let coverageFactor: number;
+  // Allow skipping at most 1/3 of hops — prevents degenerate all-skip paths.
+  const maxSkips = Math.ceil(pathHashes.length / 3);
+  // Hard limit on total DFS calls to prevent exponential blowup on ambiguous prefixes.
+  let budget = 300;
 
-    if (prevNode) {
-      const reachable = candidates.filter((c) => canReach(prevNode!, c, coverage));
-      if (reachable.length > 0) {
-        chosen        = pickByInterpolation(reachable, src, rx, i, pathHashes.length);
-        coverageFactor = 1.0;
-      } else {
-        chosen        = pickByInterpolation(candidates, src, rx, i, pathHashes.length);
-        coverageFactor = 0.3;
-      }
-    } else {
-      // First hop, source unknown — can't check inbound coverage
-      chosen        = pickByInterpolation(candidates, src, rx, i, pathHashes.length);
-      coverageFactor = 0.7;
+  /**
+   * Recursive DFS. Returns the hop results (rx-to-src order) or null if budget
+   * was exhausted before a valid path could be found.
+   */
+  function solve(hopIdx: number, prevNode: MeshNode, skipsLeft: number, visited: Set<string>): HopResult[] | null {
+    if (hopIdx < 0) return [];
+    if (--budget <= 0) return null;
+
+    const prefix = pathHashes[hopIdx]!.slice(0, 2).toUpperCase();
+    // Exclude nodes already used in this path — MeshCore nodes only relay a packet once.
+    const options = getCandidates(prefix, prevNode).filter((o) => !visited.has(o.node.node_id));
+
+    // Try each candidate. If it leads to a dead end, backtrack and try the next.
+    for (const opt of options) {
+      const nextVisited = new Set(visited);
+      nextVisited.add(opt.node.node_id);
+      const rest = solve(hopIdx - 1, opt.node, skipsLeft, nextVisited);
+      if (rest !== null) return [opt, ...rest];
     }
 
-    hopConfidences.push(coverageFactor * ambiguityFactor);
-    resolvedNodes.push(chosen);
-    prevNode = chosen;
+    // No candidate produced a valid continuation — try skipping this hop.
+    if (skipsLeft > 0) {
+      const rest = solve(hopIdx - 1, prevNode, skipsLeft - 1, visited);
+      if (rest !== null) return [null, ...rest];
+    }
+
+    return null; // truly stuck — caller will try its next candidate
   }
 
-  // Penalise if the last relay can't reach rx
-  if (resolvedNodes.length > 0 && !canReach(resolvedNodes[resolvedNodes.length - 1]!, rx, coverage)) {
-    hopConfidences[hopConfidences.length - 1]! *= 0.3;
-  }
+  const raw = solve(pathHashes.length - 1, rx, maxSkips, new Set([rx.node_id]));
+  if (!raw) return null;
 
-  const confidence = hopConfidences.reduce((a, b) => a + b, 0) / hopConfidences.length;
+  // raw is in rx→src order; reverse to get src→rx order for rendering.
+  const hops = [...raw].reverse().filter((r): r is { node: MeshNode; conf: number } => r !== null);
+  if (hops.length === 0) return null;
+
+  const confidence = hops.reduce((sum, h) => sum + h.conf, 0) / hops.length;
 
   const pathNodes: MeshNode[] = [
     ...(src?.lat && src?.lon ? [src] : []),
-    ...resolvedNodes,
+    ...hops.map((h) => h.node),
     rx,
   ];
   if (pathNodes.length < 2) return null;
@@ -241,9 +258,13 @@ export const App: React.FC = () => {
   const [filters, setFilters]       = useState<Filters>(DEFAULT_FILTERS);
   const [stats, setStats]           = useState({ mqttNodes: 0, staleNodes: 0, packetsDay: 0 });
   const [map, setMap]               = useState<LeafletMap | null>(null);
+  const [linkPairs, setLinkPairs]       = useState<Set<string>>(new Set());
+  const [viablePairsArr, setViablePairsArr] = useState<[string, string][]>([]);
   const [showDisclaimer, setShowDisclaimer] = useState(() => !localStorage.getItem(DISCLAIMER_KEY));
   const [packetPath, setPacketPath]         = useState<[number, number][] | null>(null);
   const [betaPacketPath, setBetaPacketPath] = useState<[number, number][] | null>(null);
+  const [pinnedPacketId, setPinnedPacketId] = useState<string | null>(null);
+  const pinnedTimerRef                      = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dismissDisclaimer = useCallback(() => {
     localStorage.setItem(DISCLAIMER_KEY, '1');
@@ -294,9 +315,10 @@ export const App: React.FC = () => {
 
   // Compute dotted path lines from most-recent packet's source → observer.
   // Clears after PATH_TTL ms (with a 1s fade), or immediately when the next
-  // distinct packet arrives.
+  // distinct packet arrives. Skipped while a packet is pinned by the user.
   const latestId = packets[0]?.id;
   useEffect(() => {
+    if (pinnedPacketId !== null) return;
     if (pathTimerRef.current) clearTimeout(pathTimerRef.current);
     if (pathFadeRef.current !== null) { cancelAnimationFrame(pathFadeRef.current); pathFadeRef.current = null; }
 
@@ -318,10 +340,11 @@ export const App: React.FC = () => {
     // ── Beta path (unambiguous hops + coverage validation) ────────────────────
     if (filters.betaPaths && latest?.rxNodeId && latest.path?.length && rx?.lat && rx?.lon) {
       const src    = latest.srcNodeId ? (nodes.get(latest.srcNodeId) ?? null) : null;
+      const hops   = latest.hopCount != null ? latest.path.slice(0, latest.hopCount) : latest.path;
       const result = resolveBetaPath(
-        latest.path,
+        hops,
         src?.lat && src?.lon ? src : null,
-        rx, nodes, coverage,
+        rx, nodes, coverage, linkPairs,
       );
       setBetaPacketPath(result && result.confidence >= filters.betaPathThreshold ? result.path : null);
     } else {
@@ -350,11 +373,77 @@ export const App: React.FC = () => {
       pathFadeRef.current = requestAnimationFrame(animate);
     }, PATH_TTL - 1_000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestId, filters.packetPaths, filters.betaPaths]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [latestId, filters.packetPaths, filters.betaPaths, pinnedPacketId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handlePacketPin = useCallback((packet: AggregatedPacket) => {
+    // Toggle: clicking the already-pinned packet unpins it
+    if (pinnedPacketId === packet.id) {
+      setPinnedPacketId(null);
+      if (pinnedTimerRef.current) { clearTimeout(pinnedTimerRef.current); pinnedTimerRef.current = null; }
+      if (pathTimerRef.current)   { clearTimeout(pathTimerRef.current);   pathTimerRef.current   = null; }
+      if (pathFadeRef.current !== null) { cancelAnimationFrame(pathFadeRef.current); pathFadeRef.current = null; }
+      setPacketPath(null);
+      setBetaPacketPath(null);
+      setPathOpacity(0.75);
+      return;
+    }
+
+    // Clear any running auto timers
+    if (pathTimerRef.current)   { clearTimeout(pathTimerRef.current);   pathTimerRef.current   = null; }
+    if (pathFadeRef.current !== null) { cancelAnimationFrame(pathFadeRef.current); pathFadeRef.current = null; }
+    if (pinnedTimerRef.current) { clearTimeout(pinnedTimerRef.current); pinnedTimerRef.current = null; }
+
+    const rx = packet.rxNodeId ? nodes.get(packet.rxNodeId) : undefined;
+
+    setPacketPath(null);
+
+    if (packet.rxNodeId && packet.path?.length && rx?.lat && rx?.lon) {
+      const src  = packet.srcNodeId ? (nodes.get(packet.srcNodeId) ?? null) : null;
+      const hops = packet.hopCount != null ? packet.path.slice(0, packet.hopCount) : packet.path;
+      const result = resolveBetaPath(
+        hops, src?.lat && src?.lon ? src : null, rx, nodes, coverage, linkPairs,
+      );
+      setBetaPacketPath(result ? result.path : null);
+    } else {
+      setBetaPacketPath(null);
+    }
+
+    setPathOpacity(0.75);
+    setPinnedPacketId(packet.id);
+
+    // Auto-release after 30s with a 1s fade
+    pinnedTimerRef.current = setTimeout(() => {
+      const FADE_MS   = 1_000;
+      const startTime = performance.now();
+      const animate   = (now: number) => {
+        const t = Math.min(1, (now - startTime) / FADE_MS);
+        setPathOpacity(0.75 * (1 - t));
+        if (t < 1) {
+          pathFadeRef.current = requestAnimationFrame(animate);
+        } else {
+          pathFadeRef.current = null;
+          setPacketPath(null);
+          setBetaPacketPath(null);
+          setPathOpacity(0.75);
+          setPinnedPacketId(null);
+          pinnedTimerRef.current = null;
+        }
+      };
+      pathFadeRef.current = requestAnimationFrame(animate);
+    }, 9_000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinnedPacketId, nodes, coverage, linkPairs, filters.betaPaths, filters.betaPathThreshold]);
 
   const handleMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'initial_state') {
-      handleInitialState(msg.data as Parameters<typeof handleInitialState>[0]);
+      const data = msg.data as Parameters<typeof handleInitialState>[0] & {
+        viable_pairs?: [string, string][];
+      };
+      handleInitialState(data);
+      if (data.viable_pairs) {
+        setLinkPairs(new Set(data.viable_pairs.map(([a, b]) => linkKey(a, b))));
+        setViablePairsArr(data.viable_pairs);
+      }
     } else if (msg.type === 'packet') {
       handlePacket(msg.data as LivePacketData);
     } else if (msg.type === 'node_update') {
@@ -436,9 +525,11 @@ export const App: React.FC = () => {
         showPackets={filters.livePackets}
         showCoverage={filters.coverage}
         showClientNodes={filters.clientNodes}
+        showLinks={filters.links}
+        viablePairsArr={viablePairsArr}
         packetPath={packetPath}
         betaPath={betaPacketPath}
-        showBetaPaths={filters.betaPaths}
+        showBetaPaths={filters.betaPaths || pinnedPacketId !== null}
         pathOpacity={pathOpacity}
         onMapReady={setMap}
       />
@@ -447,7 +538,14 @@ export const App: React.FC = () => {
       <FilterPanel filters={filters} onChange={setFilters} />
 
       {/* ── Live Packet Feed ───────────────────────────────────────────── */}
-      {filters.livePackets && <PacketFeed packets={packets} nodes={nodes} />}
+      {filters.livePackets && (
+        <PacketFeed
+          packets={packets}
+          nodes={nodes}
+          onPacketClick={handlePacketPin}
+          pinnedPacketId={pinnedPacketId}
+        />
+      )}
 
       {/* ── Disclaimer modal ───────────────────────────────────────────── */}
       {showDisclaimer && <DisclaimerModal onClose={dismissDisclaimer} />}

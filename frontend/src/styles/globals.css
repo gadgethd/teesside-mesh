@@ -464,6 +464,44 @@ html, body, #root {
   border-color: #1ec850;
   color: #1ec850;
 }
+.node-popup__neighbours-loading {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.node-popup__neighbours {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 8px;
+}
+.node-popup__neighbours-title {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+.node-popup__neighbour-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+.node-popup__neighbour-name {
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+.node-popup__neighbour-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 /* ─── Live packet feed (bottom left) ────────────────────────────────────── */
 .packet-feed {
@@ -478,6 +516,11 @@ html, body, #root {
   gap: 3px;
   overflow: hidden;
   pointer-events: none;
+}
+
+/* Re-enable pointer events on individual items so they're clickable */
+.packet-item {
+  pointer-events: auto;
 }
 
 /* Fade the oldest (topmost) item only when the feed is full */
@@ -503,6 +546,37 @@ html, body, #root {
 
 .packet-item--fading {
   opacity: 0;
+}
+
+.packet-item--clickable {
+  cursor: pointer;
+}
+
+.packet-item--clickable:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.packet-item--pinned {
+  background: rgba(0, 196, 255, 0.08);
+  border-color: rgba(0, 196, 255, 0.4);
+}
+
+.packet-item--pinned:hover {
+  background: rgba(0, 196, 255, 0.12);
+}
+
+.packet-item__pin {
+  font-size: 7px;
+  color: var(--accent);
+  opacity: 0.7;
+  flex-shrink: 0;
+  animation: pin-pulse 2s ease-in-out infinite;
+}
+
+@keyframes pin-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%       { opacity: 0.3; }
 }
 
 @keyframes slide-in {

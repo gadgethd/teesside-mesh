@@ -72,11 +72,34 @@ SELECT add_retention_policy(
 );
 
 ALTER TABLE packets ADD COLUMN IF NOT EXISTS advert_count INTEGER;
+ALTER TABLE packets ADD COLUMN IF NOT EXISTS path_hashes TEXT[];
 
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS packets_hash_idx   ON packets (packet_hash, time DESC);
 CREATE INDEX IF NOT EXISTS packets_rx_idx     ON packets (rx_node_id, time DESC);
 CREATE INDEX IF NOT EXISTS packets_src_idx    ON packets (src_node_id, time DESC);
+
+-- ─── Coverage polygons (one row per node, recalculated on position change) ───
+
+-- ─── Observed + ITM-validated RF links between nodes ─────────────────────────
+-- Populated by the viewshed worker as real packets with path data arrive.
+-- node_a_id < node_b_id (sorted) so each pair has exactly one row.
+
+CREATE TABLE IF NOT EXISTS node_links (
+  node_a_id        TEXT        NOT NULL,
+  node_b_id        TEXT        NOT NULL,
+  observed_count   INTEGER     NOT NULL DEFAULT 1,
+  last_observed    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  itm_path_loss_db DOUBLE PRECISION,
+  itm_viable       BOOLEAN,
+  itm_computed_at  TIMESTAMPTZ,
+  count_a_to_b     INTEGER     NOT NULL DEFAULT 0,
+  count_b_to_a     INTEGER     NOT NULL DEFAULT 0,
+  PRIMARY KEY (node_a_id, node_b_id)
+);
+CREATE INDEX IF NOT EXISTS node_links_b_idx ON node_links(node_b_id);
+ALTER TABLE node_links ADD COLUMN IF NOT EXISTS count_a_to_b INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE node_links ADD COLUMN IF NOT EXISTS count_b_to_a INTEGER NOT NULL DEFAULT 0;
 
 -- ─── Coverage polygons (one row per node, recalculated on position change) ───
 

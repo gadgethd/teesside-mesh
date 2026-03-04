@@ -94,7 +94,7 @@ export const StatsPage: React.FC = () => {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const load = () => {
-    fetch('/api/stats/charts')
+    fetch('https://app.teessidemesh.com/api/stats/charts')
       .then(r => r.json())
       .then((d: ChartData) => { setData(d); setLoading(false); setLastUpdate(new Date()); })
       .catch(() => setLoading(false));

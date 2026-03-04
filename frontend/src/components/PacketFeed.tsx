@@ -15,11 +15,13 @@ const TYPE_LABELS: Record<number, string> = {
 };
 
 interface Props {
-  packets: AggregatedPacket[];
-  nodes:   Map<string, MeshNode>;
+  packets:        AggregatedPacket[];
+  nodes:          Map<string, MeshNode>;
+  onPacketClick?: (packet: AggregatedPacket) => void;
+  pinnedPacketId?: string | null;
 }
 
-export const PacketFeed: React.FC<Props> = React.memo(({ packets, nodes }) => (
+export const PacketFeed: React.FC<Props> = React.memo(({ packets, nodes, onPacketClick, pinnedPacketId }) => (
   <div className={`packet-feed${packets.length >= 7 ? ' packet-feed--overflow' : ''}`}>
     {packets.slice(0, 7).map((p) => {
       const typeLabel = p.packetType !== undefined
@@ -37,8 +39,17 @@ export const PacketFeed: React.FC<Props> = React.memo(({ packets, nodes }) => (
         ? (p.advertCount === 1 ? 'NEW' : `${p.advertCount}`)
         : undefined;
 
+      const isPinned = pinnedPacketId === p.id;
+
       return (
-        <div key={p.id} className="packet-item">
+        <div
+          key={p.id}
+          className={`packet-item packet-item--clickable${isPinned ? ' packet-item--pinned' : ''}`}
+          onClick={() => onPacketClick?.(p)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === 'Enter' && onPacketClick?.(p)}
+        >
           <span className="packet-item__type">{typeLabel}</span>
           {advertBadge && (
             <span className="packet-item__advert-badge">{advertBadge}</span>
@@ -53,6 +64,7 @@ export const PacketFeed: React.FC<Props> = React.memo(({ packets, nodes }) => (
             {p.rxCount > 0 && <span className="count count--rx">{p.rxCount}rx</span>}
             {p.txCount > 0 && <span className="count count--tx">{p.txCount}tx</span>}
           </span>
+          {isPinned && <span className="packet-item__pin">●</span>}
         </div>
       );
     })}

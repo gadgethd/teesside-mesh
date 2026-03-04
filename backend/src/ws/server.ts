@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Server } from 'node:http';
 import { Redis } from 'ioredis';
 import type { WSMessage, LivePacket } from '../types/index.js';
-import { getNodes, getLastNPackets } from '../db/index.js';
+import { getNodes, getLastNPackets, getViableLinkPairs } from '../db/index.js';
 
 const REDIS_CHANNEL = 'meshcore:live';
 
@@ -49,10 +49,12 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
 
     // Send initial state: known nodes + last 5 minutes of packets
     try {
-      const [nodes, packets] = await Promise.all([getNodes(), getLastNPackets(10)]);
+      const [nodes, packets, viablePairs] = await Promise.all([
+        getNodes(), getLastNPackets(10), getViableLinkPairs(),
+      ]);
       const initMsg: WSMessage = {
         type: 'initial_state',
-        data: { nodes, packets },
+        data: { nodes, packets, viable_pairs: viablePairs },
         ts: Date.now(),
       };
       ws.send(JSON.stringify(initMsg));
@@ -100,4 +102,20 @@ export function broadcastNodeUpsert(node: Record<string, unknown>): void {
 /** Push a viewshed calculation job for a node with a known position. */
 export function queueViewshedJob(nodeId: string, lat: number, lon: number): void {
   void pub.lpush('meshcore:viewshed_jobs', JSON.stringify({ node_id: nodeId, lat, lon }));
+}
+
+/** Push a link observation job for a received packet with relay path data. */
+export function queueLinkJob(
+  rxNodeId: string,
+  srcNodeId: string | undefined,
+  pathHashes: string[],
+  hopCount: number | undefined,
+): void {
+  if (!pathHashes.length) return;
+  void pub.lpush('meshcore:link_jobs', JSON.stringify({
+    rx_node_id:   rxNodeId,
+    src_node_id:  srcNodeId,
+    path_hashes:  pathHashes,
+    hop_count:    hopCount,
+  }));
 }

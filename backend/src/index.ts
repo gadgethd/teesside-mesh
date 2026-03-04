@@ -6,8 +6,8 @@ import express from 'express';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
 import { initDb, query } from './db/index.js';
-import { startMqttClient, onPacket, onNodeSeen, onNodeUpsert } from './mqtt/client.js';
-import { initWebSocketServer, broadcastPacket, broadcastNodeUpdate, broadcastNodeUpsert, queueViewshedJob } from './ws/server.js';
+import { startMqttClient, onPacket, onNodeSeen, onNodeUpsert, backfillHistoricalLinks } from './mqtt/client.js';
+import { initWebSocketServer, broadcastPacket, broadcastNodeUpdate, broadcastNodeUpsert, queueViewshedJob, queueLinkJob } from './ws/server.js';
 import apiRoutes from './api/routes.js';
 
 const ALLOWED_ORIGINS = (process.env['ALLOWED_ORIGINS'] ?? '')
@@ -45,7 +45,12 @@ async function main() {
   }
 
   // 2. Wire up MQTT → WS broadcast
-  onPacket((packet) => broadcastPacket(packet));
+  onPacket((packet) => {
+    broadcastPacket(packet);
+    if (packet.path?.length && packet.rxNodeId) {
+      queueLinkJob(packet.rxNodeId, packet.srcNodeId, packet.path, packet.hopCount);
+    }
+  });
   onNodeSeen((nodeId) => broadcastNodeUpdate(nodeId));
   onNodeUpsert((node) => {
     broadcastNodeUpsert(node);
@@ -104,6 +109,19 @@ async function main() {
 
   // 5. Start MQTT client
   startMqttClient();
+
+  // 6. Backfill node_links from historical packets (once, if table is empty)
+  process.nextTick(async () => {
+    const { rows } = await query<{ count: string }>('SELECT COUNT(*) AS count FROM node_links');
+    if (Number(rows[0]?.count ?? 0) === 0) {
+      console.log('[app] node_links empty — backfilling from historical packets…');
+      await backfillHistoricalLinks((rxNodeId, srcNodeId, path, hopCount) => {
+        queueLinkJob(rxNodeId, srcNodeId, path, hopCount);
+      });
+    } else {
+      console.log('[app] node_links already populated, skipping historical backfill');
+    }
+  });
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[app] listening on http://0.0.0.0:${PORT}`);

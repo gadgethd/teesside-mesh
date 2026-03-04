@@ -82,6 +82,8 @@ interface MapViewProps {
   showPackets:     boolean;
   showCoverage:    boolean;
   showClientNodes: boolean;
+  showLinks:       boolean;
+  viablePairsArr:  [string, string][];
   packetPath:      [number, number][] | null;
   betaPath:        [number, number][] | null;
   showBetaPaths:   boolean;
@@ -95,7 +97,7 @@ const DEFAULT_ZOOM = 11;
 
 export const MapView: React.FC<MapViewProps> = ({
   nodes, arcs, activeNodes, coverage, showPackets, showCoverage, showClientNodes,
-  packetPath, betaPath, showBetaPaths, pathOpacity, onMapReady,
+  showLinks, viablePairsArr, packetPath, betaPath, showBetaPaths, pathOpacity, onMapReady,
 }) => {
   const [map, setMap] = useState<LeafletMap | null>(null);
 
@@ -170,6 +172,20 @@ export const MapView: React.FC<MapViewProps> = ({
 
   const coverageRings = useCoverageDisplayRings(coverage);
 
+  // Resolve viable link pairs to lat/lon polyline positions
+  const linkLines = useMemo(() => {
+    if (!showLinks || viablePairsArr.length === 0) return [];
+    const lines: [number, number][][] = [];
+    for (const [aId, bId] of viablePairsArr) {
+      const a = nodes.get(aId);
+      const b = nodes.get(bId);
+      if (a?.lat && a?.lon && b?.lat && b?.lon) {
+        lines.push([[a.lat, a.lon], [b.lat, b.lon]]);
+      }
+    }
+    return lines;
+  }, [showLinks, viablePairsArr, nodes]);
+
   return (
     <div className="map-area">
       <NodeSearch nodes={nodes} map={map} />
@@ -209,6 +225,24 @@ export const MapView: React.FC<MapViewProps> = ({
               }}
               interactive={false}
             />
+          </Pane>
+        )}
+
+        {/* Confirmed link lines — ITM-viable node pairs */}
+        {showLinks && linkLines.length > 0 && (
+          <Pane name="linksPane" style={{ zIndex: 400 }}>
+            {linkLines.map((positions, i) => (
+              <Polyline
+                key={i}
+                positions={positions}
+                pathOptions={{
+                  color:   '#fbbf24',
+                  weight:  1.5,
+                  opacity: 0.55,
+                }}
+                interactive={false}
+              />
+            ))}
           </Pane>
         )}
 

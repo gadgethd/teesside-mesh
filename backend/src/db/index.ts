@@ -81,15 +81,17 @@ export async function insertPacket(p: {
   payload?: Record<string, unknown>;
   rawHex: string;
   advertCount?: number;
+  pathHashes?: string[];
 }): Promise<void> {
   await pool.query(
     `INSERT INTO packets
        (time, packet_hash, rx_node_id, src_node_id, topic, packet_type, route_type,
-        hop_count, rssi, snr, payload, raw_hex, advert_count)
-     VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        hop_count, rssi, snr, payload, raw_hex, advert_count, path_hashes)
+     VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [p.packetHash, p.rxNodeId, p.srcNodeId, p.topic, p.packetType,
      p.routeType, p.hopCount, p.rssi, p.snr,
-     p.payload ? JSON.stringify(p.payload) : null, p.rawHex, p.advertCount ?? null]
+     p.payload ? JSON.stringify(p.payload) : null, p.rawHex, p.advertCount ?? null,
+     p.pathHashes ?? null]
   );
 }
 
@@ -130,7 +132,7 @@ export async function getLastNPackets(n: number) {
   const res = await pool.query(
     `SELECT * FROM (
        SELECT DISTINCT ON (packet_hash) time, packet_hash, rx_node_id, src_node_id,
-              packet_type, hop_count, payload, advert_count
+              packet_type, hop_count, payload, advert_count, path_hashes
        FROM packets
        WHERE time > NOW() - INTERVAL '24 hours'
        ORDER BY packet_hash, time DESC
@@ -139,6 +141,14 @@ export async function getLastNPackets(n: number) {
     [n]
   );
   return res.rows;
+}
+
+/** Returns only viable link pairs — compact for sending in initial WebSocket state. */
+export async function getViableLinkPairs(): Promise<[string, string][]> {
+  const res = await pool.query<{ node_a_id: string; node_b_id: string }>(
+    `SELECT node_a_id, node_b_id FROM node_links WHERE itm_viable = true`
+  );
+  return res.rows.map((r) => [r.node_a_id, r.node_b_id]);
 }
 
 export { pool };

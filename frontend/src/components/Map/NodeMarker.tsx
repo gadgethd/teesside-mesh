@@ -69,6 +69,12 @@ function coverageToRings(cov: NodeCoverage): LatLngExpression[][] {
   return [];
 }
 
+interface NodeLink {
+  peer_id: string; peer_name: string | null; observed_count: number;
+  itm_path_loss_db: number | null;
+  count_this_to_peer: number; count_peer_to_this: number;
+}
+
 interface Props {
   node:          MeshNode;
   isActive:      boolean;
@@ -77,6 +83,7 @@ interface Props {
 
 export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive, nodeCoverage }) => {
   const [showPreview, setShowPreview] = useState(false);
+  const [links, setLinks]             = useState<NodeLink[] | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
@@ -110,7 +117,15 @@ export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive, nodeCov
         position={[node.lat, node.lon]}
         icon={buildIcon(node.is_online, isActive, isStale, variant)}
       >
-        <Popup>
+        <Popup eventHandlers={{
+          add: () => {
+            if (links !== null) return; // already fetched
+            fetch(`https://app.teessidemesh.com/api/nodes/${node.node_id}/links`)
+              .then((r) => r.json())
+              .then((data: NodeLink[]) => setLinks(data))
+              .catch(() => setLinks([]));
+          },
+        }}>
           <div className="node-popup">
             <div className="node-popup__name">{node.name ?? `Unknown ${fallbackName}`}</div>
             {node.role !== undefined && node.role !== 2 && (
@@ -156,6 +171,26 @@ export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive, nodeCov
               >
                 {showPreview ? 'Showing coverage…' : 'Preview coverage'}
               </button>
+            )}
+            {links === null && <div className="node-popup__neighbours-loading">Loading neighbours…</div>}
+            {links !== null && links.length > 0 && (
+              <div className="node-popup__neighbours">
+                <div className="node-popup__neighbours-title">Confirmed neighbours</div>
+                {links.map((lk) => {
+                  const tx = lk.count_this_to_peer > 0;
+                  const rx = lk.count_peer_to_this > 0;
+                  const arrow = tx && rx ? '↔' : tx ? '→' : '←';
+                  return (
+                    <div key={lk.peer_id} className="node-popup__neighbour-row">
+                      <span className="node-popup__neighbour-name">{arrow} {lk.peer_name ?? lk.peer_id.slice(0, 8)}</span>
+                      <span className="node-popup__neighbour-meta">
+                        {lk.observed_count}× seen
+                        {lk.itm_path_loss_db != null && <> &middot; {Math.round(lk.itm_path_loss_db)} dB</>}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         </Popup>

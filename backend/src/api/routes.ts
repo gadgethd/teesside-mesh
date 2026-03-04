@@ -14,6 +14,35 @@ router.get('/nodes', async (_req, res) => {
   }
 });
 
+// GET /api/nodes/:id/links — ITM-viable neighbours for a node
+router.get('/nodes/:id/links', async (req, res) => {
+  try {
+    const id = req.params['id']!;
+    const result = await query<{
+      peer_id: string; peer_name: string | null; observed_count: number;
+      itm_path_loss_db: number | null;
+      count_this_to_peer: number; count_peer_to_this: number;
+    }>(
+      `SELECT
+         CASE WHEN node_a_id = $1 THEN node_b_id ELSE node_a_id END AS peer_id,
+         n.name AS peer_name,
+         observed_count,
+         itm_path_loss_db,
+         CASE WHEN node_a_id = $1 THEN count_a_to_b ELSE count_b_to_a END AS count_this_to_peer,
+         CASE WHEN node_a_id = $1 THEN count_b_to_a ELSE count_a_to_b END AS count_peer_to_this
+       FROM node_links
+       LEFT JOIN nodes n ON n.node_id = CASE WHEN node_a_id = $1 THEN node_b_id ELSE node_a_id END
+       WHERE (node_a_id = $1 OR node_b_id = $1) AND itm_viable = true
+       ORDER BY observed_count DESC`,
+      [id],
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('[api] GET /nodes/:id/links', (err as Error).message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/nodes/:id/history?hours=24
 router.get('/nodes/:id/history', async (req, res) => {
   try {

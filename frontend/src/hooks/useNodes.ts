@@ -91,6 +91,7 @@ export function useNodes() {
       hop_count?: number;
       payload?: Record<string, unknown>;
       advert_count?: number | null;
+      path_hashes?: string[] | null;
     }>;
   }) => {
     const nodeMap = new Map<string, MeshNode>();
@@ -115,6 +116,7 @@ export function useNodes() {
         srcNodeId:   row.src_node_id,
         summary,
         hopCount:    row.hop_count,
+        path:        row.path_hashes ?? undefined,
         rxCount:     1,
         txCount:     0,
         ts:          new Date(row.time).getTime(),

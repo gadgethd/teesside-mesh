@@ -40,8 +40,9 @@ SRTM_DIR     = Path(os.environ.get('SRTM_DIR', '/data/srtm'))
 REDIS_URL    = os.environ.get('REDIS_URL', 'redis://redis:6379')
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
-JOB_QUEUE    = 'meshcore:viewshed_jobs'
-LIVE_CHANNEL = 'meshcore:live'
+JOB_QUEUE      = 'meshcore:viewshed_jobs'
+LINK_JOB_QUEUE = 'meshcore:link_jobs'
+LIVE_CHANNEL   = 'meshcore:live'
 
 ANTENNA_HEIGHT_M = 5        # observer height above ground (m) — fixed 5 m antenna
 MAX_RADIUS_M     = 100_000  # absolute cap on viewshed radius (m)
@@ -52,6 +53,111 @@ STEP_M           = 50.0     # ray step size in metres
 # Radio horizon parameters
 K_FACTOR  = 4 / 3        # effective Earth radius multiplier (standard troposphere)
 R_EARTH_M = 6_371_000    # mean Earth radius (m)
+
+# ── RF propagation model parameters (LoRa 868 MHz) ───────────────────────────
+
+FREQ_MHZ        = 868.0
+LAMBDA_M        = 3e8 / (FREQ_MHZ * 1e6)   # wavelength ~0.345 m
+LINK_BUDGET_DB  = 148.0   # 17 dBm TX + ~130 dBm RX sensitivity (LoRa SF10 BW125) +1 dB SRTM DSM correction
+FADE_MARGIN_DB  = 10.0    # safety / link margin
+PROFILE_STEP_M  = 250.0   # terrain profile sample spacing (m)
+
+def compute_path_loss(lat1: float, lon1: float, elev1: float,
+                      lat2: float, lon2: float, elev2: float,
+                      vrt_path: str) -> tuple[float, bool]:
+    """Estimate RF path loss (dB) between two points.
+
+    Uses free-space path loss plus ITU-R P.526 single knife-edge diffraction
+    over the dominant terrain obstruction, corrected for Earth curvature.
+    Returns (path_loss_db, is_viable).
+    """
+    cos_mid = math.cos(math.radians((lat1 + lat2) / 2))
+    dlat    = (lat2 - lat1) * 111_320
+    dlon    = (lon2 - lon1) * 111_320 * cos_mid
+    d_total = math.sqrt(dlat ** 2 + dlon ** 2)
+
+    if d_total < 1.0:
+        return 0.0, True
+
+    # Free-space path loss (dB)
+    fspl = 20 * math.log10(4 * math.pi * d_total / LAMBDA_M)
+
+    # Terrain profile: N evenly-spaced samples along the path
+    N = max(20, min(200, int(d_total / PROFILE_STEP_M)))
+
+    ds = gdal.Open(vrt_path)
+    if ds is None:
+        viable = fspl < LINK_BUDGET_DB
+        return fspl, viable
+
+    gt     = ds.GetGeoTransform()
+    inv_gt = gdal.InvGeoTransform(gt)
+    band   = ds.GetRasterBand(1)
+
+    heights: list[float] = []
+    dists:   list[float] = []
+    for i in range(N + 1):
+        t    = i / N
+        la   = lat1 + t * (lat2 - lat1)
+        lo   = lon1 + t * (lon2 - lon1)
+        px, py = gdal.ApplyGeoTransform(inv_gt, lo, la)
+        px   = int(np.clip(px, 0, ds.RasterXSize - 1))
+        py   = int(np.clip(py, 0, ds.RasterYSize - 1))
+        data = band.ReadAsArray(px, py, 1, 1)
+        h    = max(0.0, float(data[0][0])) if data is not None else 0.0
+        heights.append(h)
+        dists.append(t * d_total)
+    ds = None
+
+    h_tx = elev1 + ANTENNA_HEIGHT_M   # transmitter height ASL + antenna
+    h_rx = elev2 + ANTENNA_HEIGHT_M
+
+    # Find dominant obstruction via Fresnel-Kirchhoff diffraction parameter
+    max_v = -999.0
+    for i in range(1, N):
+        d1 = dists[i]
+        d2 = d_total - dists[i]
+        if d1 <= 0 or d2 <= 0:
+            continue
+        los_h       = h_tx + (h_rx - h_tx) * (d1 / d_total)
+        earth_bulge = (d1 * d2) / (2 * K_FACTOR * R_EARTH_M)
+        excess_h    = heights[i] + earth_bulge - los_h
+        v = excess_h * math.sqrt(2 * (d1 + d2) / (LAMBDA_M * d1 * d2))
+        max_v = max(max_v, v)
+
+    # ITU-R P.526 knife-edge diffraction loss (dB)
+    if max_v <= -0.78:
+        diff_loss = 0.0
+    else:
+        diff_loss = max(0.0, 6.9 + 20 * math.log10(
+            math.sqrt((max_v - 0.1) ** 2 + 1) + max_v - 0.1
+        ))
+
+    total_loss = fspl + diff_loss
+    viable     = total_loss < LINK_BUDGET_DB
+    return total_loss, viable
+
+
+def build_link_vrt(lat1: float, lon1: float, lat2: float, lon2: float,
+                   tmp_dir: str) -> Optional[str]:
+    """Build a GDAL VRT from already-cached SRTM tiles covering the path.
+    Returns None if no tiles are available (will be retried later once
+    nearby viewsheds have triggered tile downloads)."""
+    min_lat = math.floor(min(lat1, lat2))
+    max_lat = math.floor(max(lat1, lat2))
+    min_lon = math.floor(min(lon1, lon2))
+    max_lon = math.floor(max(lon1, lon2))
+    paths   = [
+        str(SRTM_DIR / f'{tile_name(lt, ln)}.hgt')
+        for lt in range(min_lat, max_lat + 1)
+        for ln in range(min_lon, max_lon + 1)
+        if (SRTM_DIR / f'{tile_name(lt, ln)}.hgt').exists()
+    ]
+    if not paths:
+        return None
+    vrt = f'{tmp_dir}/link.vrt'
+    r   = subprocess.run(['gdalbuildvrt', vrt] + paths, capture_output=True, text=True)
+    return vrt if r.returncode == 0 else None
 
 # ── UK mainland polygon (loaded once at startup for ocean clipping) ───────────
 
@@ -360,6 +466,146 @@ def backfill_elevations(db):
             log.info(f'  {node_id[:12]}…: elevation={elevation_m:.0f} m ASL (from radius {radius_m/1000:.1f} km)')
     db.commit()
 
+def process_link_job(db, r_client, job: dict):
+    """Resolve relay path prefixes to known nodes (backwards from the receiver),
+    record observations in node_links, and compute RF path loss for new pairs."""
+    rx_node_id  = job.get('rx_node_id')
+    src_node_id = job.get('src_node_id')
+    path_hashes = job.get('path_hashes', [])
+
+    if not rx_node_id or not path_hashes:
+        return
+
+    # Load all positioned nodes
+    with db.cursor() as cur:
+        cur.execute(
+            'SELECT node_id, lat, lon, elevation_m, name, role FROM nodes '
+            'WHERE lat IS NOT NULL AND lon IS NOT NULL'
+        )
+        all_nodes = {
+            row[0]: {'lat': row[1], 'lon': row[2], 'elevation_m': row[3] or 0.0,
+                     'name': row[4], 'role': row[5]}
+            for row in cur.fetchall()
+        }
+
+    rx = all_nodes.get(rx_node_id)
+    if not rx:
+        return
+
+    def node_dist(a: dict, b: dict) -> float:
+        cos_m = math.cos(math.radians((a['lat'] + b['lat']) / 2))
+        return math.sqrt(
+            ((a['lat'] - b['lat']) * 111.32) ** 2 +
+            ((a['lon'] - b['lon']) * 111.32 * cos_m) ** 2
+        )
+
+    # Resolve path working backwards from rx (known position anchor)
+    resolved: list[tuple[str, dict]] = []   # built in reverse, then flipped
+    prev    = rx
+    for prefix in reversed(path_hashes):
+        prefix = prefix[:2].upper()
+        candidates = [
+            (nid, nd) for nid, nd in all_nodes.items()
+            if nid.upper().startswith(prefix)
+            and (nd['role'] is None or nd['role'] == 2)
+            and nd['name'] and '🚫' not in nd['name']
+        ]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda x: node_dist(x[1], prev))
+        best_id, best = candidates[0]
+        resolved.insert(0, (best_id, best))
+        prev = best
+
+    # Build adjacency list: src → relays → rx
+    full: list[tuple[str, dict]] = []
+    if src_node_id and src_node_id in all_nodes:
+        full.append((src_node_id, all_nodes[src_node_id]))
+    full.extend(resolved)
+    full.append((rx_node_id, rx))
+
+    if len(full) < 2:
+        return
+
+    # Upsert observations and compute path loss for each adjacent pair.
+    # full[i] → full[i+1] means full[i] transmitted, full[i+1] received.
+    with tempfile.TemporaryDirectory() as tmp:
+        for i in range(len(full) - 1):
+            src_id, src = full[i]    # transmitted
+            dst_id, dst = full[i + 1]  # received
+            if not src['lat'] or not dst['lat']:
+                continue
+
+            # Canonical ordering (lower ID first) → unique primary key
+            if src_id < dst_id:
+                a_id, a, b_id, b = src_id, src, dst_id, dst
+                inc_atob, inc_btoa = 1, 0   # src==a transmitted to dst==b
+            else:
+                a_id, a, b_id, b = dst_id, dst, src_id, src
+                inc_atob, inc_btoa = 0, 1   # src==b transmitted to dst==a
+
+            # Upsert observation with directional counts; check whether ITM already computed
+            with db.cursor() as cur:
+                cur.execute(
+                    '''INSERT INTO node_links
+                           (node_a_id, node_b_id, observed_count, last_observed,
+                            count_a_to_b, count_b_to_a)
+                       VALUES (%s, %s, 1, NOW(), %s, %s)
+                       ON CONFLICT (node_a_id, node_b_id) DO UPDATE
+                         SET observed_count = node_links.observed_count + 1,
+                             last_observed  = NOW(),
+                             count_a_to_b   = node_links.count_a_to_b + %s,
+                             count_b_to_a   = node_links.count_b_to_a + %s
+                       RETURNING observed_count, itm_computed_at''',
+                    (a_id, b_id, inc_atob, inc_btoa, inc_atob, inc_btoa),
+                )
+                row = cur.fetchone()
+            obs_count      = row[0] if row else 1
+            itm_computed   = row[1] if row else None
+
+            # Compute ITM path loss if not yet done and tiles are cached
+            path_loss_db: Optional[float] = None
+            itm_viable:   Optional[bool]  = None
+            if itm_computed is None:
+                vrt = build_link_vrt(a['lat'], a['lon'], b['lat'], b['lon'], tmp)
+                if vrt:
+                    try:
+                        path_loss_db, itm_viable = compute_path_loss(
+                            a['lat'], a['lon'], a['elevation_m'],
+                            b['lat'], b['lon'], b['elevation_m'],
+                            vrt,
+                        )
+                        with db.cursor() as cur:
+                            cur.execute(
+                                '''UPDATE node_links
+                                   SET itm_path_loss_db = %s,
+                                       itm_viable       = %s,
+                                       itm_computed_at  = NOW()
+                                   WHERE node_a_id = %s AND node_b_id = %s''',
+                                (round(path_loss_db, 1), itm_viable, a_id, b_id),
+                            )
+                        log.info(
+                            f'Link {a_id[:8]}…↔{b_id[:8]}…: '
+                            f'{path_loss_db:.1f} dB {"✓" if itm_viable else "✗"} '
+                            f'(obs={obs_count})'
+                        )
+                    except Exception as exc:
+                        log.warning(f'Path loss computation failed: {exc}')
+
+            # Notify frontend
+            r_client.publish(LIVE_CHANNEL, json.dumps({
+                'type': 'link_update',
+                'data': {
+                    'node_a_id':        a_id,
+                    'node_b_id':        b_id,
+                    'observed_count':   obs_count,
+                    'itm_path_loss_db': path_loss_db,
+                    'itm_viable':       itm_viable,
+                },
+                'ts': int(time.time() * 1000),
+            }))
+
+
 def enqueue_uncovered(db, r_client):
     """On startup, queue all nodes that have a position but no coverage yet."""
     # Remove any coverage that was previously computed for hidden or non-repeater nodes.
@@ -458,11 +704,22 @@ def worker_loop():
 
     while True:
         try:
-            item = r_client.brpop(JOB_QUEUE, timeout=60)
+            # Drain any pending link jobs first (fast) before blocking on viewshed
+            while True:
+                raw = r_client.rpop(LINK_JOB_QUEUE)
+                if raw is None:
+                    break
+                process_link_job(db, r_client, json.loads(raw))
+
+            # Block-wait for a viewshed or link job (viewshed has priority)
+            item = r_client.brpop([JOB_QUEUE, LINK_JOB_QUEUE], timeout=30)
             if item is None:
                 continue
-            _, raw = item
-            process_job(db, r_client, json.loads(raw))
+            queue_name, raw = item
+            if queue_name == LINK_JOB_QUEUE:
+                process_link_job(db, r_client, json.loads(raw))
+            else:
+                process_job(db, r_client, json.loads(raw))
         except psycopg2.OperationalError:
             log.warning(f'{name}: DB connection lost — reconnecting')
             db = wait_for_db()
