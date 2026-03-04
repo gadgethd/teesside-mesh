@@ -236,7 +236,16 @@ export function resolveBetaPath(
     const usedIds = new Set<string>();
 
     const confirmed = all
-      .filter((c) => linkPairs.has(linkKey(c.node_id, prevNode.node_id)))
+      .filter((c) => {
+        const key = linkKey(c.node_id, prevNode.node_id);
+        if (!linkPairs.has(key)) return false;
+        const meta = linkMetrics.get(key);
+        if (!meta || meta.count_a_to_b == null || meta.count_b_to_a == null) return true;
+        const dir = directionalSupport(meta, c.node_id, prevNode.node_id);
+        const observed = meta.observed_count ?? 0;
+        const minDirectionalSupport = observed >= 50 ? 0.12 : 0.02;
+        return dir >= minDirectionalSupport;
+      })
       .sort((a, b) => sortScore(b) - sortScore(a))
       .slice(0, 4)
       .map((c) => {
