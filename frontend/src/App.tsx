@@ -178,7 +178,7 @@ function resolveBetaPath(
   type HopResult = { node: MeshNode; conf: number } | null; // null = skipped
 
   /** Ordered candidate list for a single hop: confirmed neighbours first, then reachable,
-   *  then a last-resort closest match within 500 km. A hop is only skipped when no node
+   *  then a last-resort closest match within 50 km. A hop is only skipped when no node
    *  in the DB has the matching 2-char prefix at all. */
   function getCandidates(prefix: string, prevNode: MeshNode): Array<{ node: MeshNode; conf: number }> {
     const all = Array.from(allNodes.values()).filter(
@@ -187,32 +187,53 @@ function resolveBetaPath(
     );
     if (all.length === 0) return [];
 
+    // Cosine similarity between prevNode→candidate and prevNode→src vectors.
+    // Returns 1 (perfectly aligned toward src), 0 (perpendicular), -1 (opposite).
+    // Falls back to 0 when src is unknown.
+    function align(c: MeshNode): number {
+      if (!src?.lat || !src?.lon) return 0;
+      const dLat = src.lat! - prevNode.lat!;
+      const dLon = src.lon! - prevNode.lon!;
+      const cLat = c.lat! - prevNode.lat!;
+      const cLon = c.lon! - prevNode.lon!;
+      const dot  = dLat * cLat + dLon * cLon;
+      const mag  = Math.hypot(dLat, dLon) * Math.hypot(cLat, cLon);
+      return mag > 0 ? dot / mag : 0;
+    }
+
+    // Combined sort score: alignment toward src weighted against distance.
+    // 50 km normaliser means alignment dominates at short range and distance
+    // penalises equally at the 50 km fallback boundary.
+    function sortScore(c: MeshNode): number {
+      return align(c) - distKm(c, prevNode) / 50;
+    }
+
     const usedIds = new Set<string>();
 
     const confirmed = all
       .filter((c) => linkPairs.has(linkKey(c.node_id, prevNode.node_id)))
-      .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
+      .sort((a, b) => sortScore(b) - sortScore(a))
       .map((c) => { usedIds.add(c.node_id); return { node: c, conf: 0.9 }; });
 
     const reachable = all
       .filter((c) => !usedIds.has(c.node_id) && canReach(c, prevNode, coverage) && hasLoS(c, prevNode))
-      .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
+      .sort((a, b) => sortScore(b) - sortScore(a))
       .slice(0, 2)
       .map((c) => { usedIds.add(c.node_id); return { node: c, conf: 0.3 / Math.max(1, all.length) }; });
 
-    // Last resort: closest prefix match within 50 km with LOS clearance.
-    // Prevents hops being silently dropped just because link data is sparse.
+    // Last resort: prefix match within 50 km with LOS clearance, sorted toward src.
     const fallback = all
       .filter((c) => !usedIds.has(c.node_id) && distKm(c, prevNode) < 50 && hasLoS(c, prevNode))
-      .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
+      .sort((a, b) => sortScore(b) - sortScore(a))
       .slice(0, 1)
       .map((c) => ({ node: c, conf: 0.05 / Math.max(1, all.length) }));
 
     return [...confirmed, ...reachable, ...fallback];
   }
 
-  // Only skip a hop when there is genuinely no node in the DB matching the prefix.
-  const maxSkips = pathHashes.length;
+  // Allow at most 2 skips, and no more than 1 per 3 hops.
+  // Prevents degenerate paths where most relays are skipped due to sparse data.
+  const maxSkips = Math.min(2, Math.floor(pathHashes.length / 3));
   // Hard limit on total DFS calls to prevent exponential blowup on ambiguous prefixes.
   let budget = 300;
 
