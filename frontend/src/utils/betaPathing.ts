@@ -1,6 +1,7 @@
 import type { MeshNode } from '../hooks/useNodes.js';
 import type { NodeCoverage } from '../hooks/useCoverage.js';
-import { hasCoords, linkKey, MIN_LINK_OBSERVATIONS, type LinkMetrics } from './pathing.js';
+import { hasCoords, linkKey, type LinkMetrics } from './pathing.js';
+import { confirmedLinkConfidence, directionalSupport, minimumDirectionalSupport } from './betaLinks.js';
 export type { LinkMetrics } from './pathing.js';
 
 const MAX_BETA_HOPS = 15;
@@ -180,35 +181,6 @@ export function resolveBetaPath(
     return distKm(candidate, src) <= distKm(prevNode, src) + 8;
   }
 
-  function directionalSupport(meta: LinkMetrics | undefined, fromId: string, toId: string): number {
-    if (!meta || meta.count_a_to_b == null || meta.count_b_to_a == null) return 0.5;
-    const a = fromId < toId ? fromId : toId;
-    const forward = fromId === a ? meta.count_a_to_b : meta.count_b_to_a;
-    const reverse = fromId === a ? meta.count_b_to_a : meta.count_a_to_b;
-    const total = forward + reverse;
-    if (total <= 0) return 0.5;
-    return forward / total;
-  }
-
-  function confirmedConfidence(
-    meta: LinkMetrics | undefined,
-    fromId: string,
-    toId: string,
-    prefixBoost: number,
-    transitionBoost: number,
-    motifBoost: number,
-  ): number {
-    const observed = meta?.observed_count ?? MIN_LINK_OBSERVATIONS;
-    const obsBoost = Math.min(0.18, Math.log10(1 + observed) * 0.12);
-    const pathLoss = meta?.itm_path_loss_db;
-    const plPenalty = pathLoss == null ? 0 : Math.min(0.12, Math.max(0, (pathLoss - 130) / 120));
-    const dirBoost = (directionalSupport(meta, fromId, toId) - 0.5) * 0.12;
-    const viableBoost = meta?.itm_viable === false ? -0.1 : 0.05;
-    const edgeBoost = edgePrior(fromId, toId) * 0.3;
-    const conf = 0.66 + obsBoost + dirBoost + viableBoost - plPenalty + prefixBoost + transitionBoost + motifBoost + edgeBoost;
-    return clamp(conf, 0.45, 0.98);
-  }
-
   function getCandidates(
     prefix: string,
     prevPrefix: string,
@@ -244,8 +216,7 @@ export function resolveBetaPath(
         if (!meta || meta.count_a_to_b == null || meta.count_b_to_a == null) return true;
         const dir = directionalSupport(meta, c.node_id, prevNode.node_id);
         const observed = meta.observed_count ?? 0;
-        const minDirectionalSupport = observed >= 50 ? 0.12 : 0.02;
-        return dir >= minDirectionalSupport;
+        return dir >= minimumDirectionalSupport(observed);
       })
       .sort((a, b) => sortScore(b) - sortScore(a))
       .slice(0, 4)
@@ -256,9 +227,15 @@ export function resolveBetaPath(
         const transitionBoost = transitionPrior(c.node_id, prevNode.node_id) * 0.24;
         const motifBoost = motifPrior([c.node_id, prevNode.node_id]) * 0.2
           + (nextTowardRx ? motifPrior([c.node_id, prevNode.node_id, nextTowardRx]) * 0.25 : 0);
+        const edgeBoost = edgePrior(c.node_id, prevNode.node_id) * 0.3;
         return {
           node: c,
-          conf: confirmedConfidence(meta, c.node_id, prevNode.node_id, priorBoost, transitionBoost, motifBoost),
+          conf: confirmedLinkConfidence(meta, c.node_id, prevNode.node_id, {
+            prefix: priorBoost,
+            transition: transitionBoost,
+            motif: motifBoost,
+            edge: edgeBoost,
+          }),
         };
       });
 

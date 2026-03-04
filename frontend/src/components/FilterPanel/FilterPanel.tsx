@@ -19,7 +19,7 @@ export const FILTER_ROWS: Array<{ key: keyof Filters; label: string; color: stri
   { key: 'livePackets',  label: 'Live Feed',        color: '#00c4ff' },
   { key: 'packetPaths',  label: 'Packet Paths',     color: '#00c4ff', hollow: true },
   { key: 'betaPaths',    label: 'Paths (Beta)',      color: '#a855f7', hollow: true },
-  { key: 'links',        label: 'Links',            color: '#fbbf24' },
+  { key: 'links',        label: 'Links (Beta)',     color: '#fbbf24' },
   { key: 'coverage',     label: 'Coverage',         color: '#00e676' },
   { key: 'clientNodes',  label: 'Companion / Room', color: '#ff9800' },
 ];
