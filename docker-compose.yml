@@ -35,12 +35,10 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile
-      args:
-        VITE_APP_HOSTNAME: ${VITE_APP_HOSTNAME:-}
+      dockerfile: Dockerfile.backend
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-meshcore}:${POSTGRES_PASSWORD}@timescaledb:5432/${POSTGRES_DB:-meshcore}
@@ -52,7 +50,7 @@ services:
       OPENTOPODATA_API: ${OPENTOPODATA_API:-https://api.opentopodata.org}
       PORT: ${PORT:-3000}
       MESHCORE_CHANNEL_SECRETS: ${MESHCORE_CHANNEL_SECRETS:-}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:3002}
       NODE_ENV: production
     depends_on:
       timescaledb:
@@ -63,6 +61,18 @@ services:
         condition: service_started
     ports:
       - "3000:3000"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+      args:
+        VITE_APP_HOSTNAME: ${VITE_APP_HOSTNAME:-}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3001:80"
 
   viewshed-worker:
     build:
@@ -95,9 +105,9 @@ services:
         VITE_APP_HOSTNAME: ${VITE_APP_HOSTNAME:-}
     restart: unless-stopped
     ports:
-      - "3001:80"
+      - "3002:80"
     depends_on:
-      - app
+      - backend
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -107,6 +117,7 @@ services:
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
+      - backend
       - app
       - website
       - mosquitto

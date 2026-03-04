@@ -1,7 +1,5 @@
 import 'node:process';
 import http from 'node:http';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
@@ -15,7 +13,6 @@ const ALLOWED_ORIGINS = (process.env['ALLOWED_ORIGINS'] ?? '')
   .map(s => s.trim())
   .filter(Boolean);
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env['PORT'] ?? 3000);
 
 async function main() {
@@ -93,15 +90,6 @@ async function main() {
 
   // Health check
   app.get('/healthz', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
-
-  // Serve frontend static files (built into /app/public in Docker)
-  const publicDir = path.join(__dirname, '..', 'public');
-  app.use(express.static(publicDir));
-
-  // SPA fallback
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'index.html'));
-  });
 
   // 4. HTTP server + WebSocket
   const httpServer = http.createServer(app);
